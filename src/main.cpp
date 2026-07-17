@@ -16,9 +16,13 @@
   transicions, reset, etc.) no s'implementen — no tenen sentit en aquest
   maquinari i simplement s'ignoren si arriben.
 
-  Identificació del dispositiu: NO es fa servir cap índex nou ni T62 amb un
-  format especial — l'app distingeix l'ARDMX One de l'ARDMX4 pel NOM del
-  dispositiu Bluetooth aparellat (veure BLUETOOTH_DEVICE_NAME més avall).
+  Identificació del dispositiu: l'app distingeix l'ARDMX One de l'ARDMX4 pel
+  NOM del dispositiu Bluetooth aparellat, que sempre té el format fix
+  "ARDMXOne_nnn" (veure BLUETOOTH_NAME_PREFIX més avall). El número (nnn) de
+  cada unitat es pot canviar des de la pantalla de Debug de l'app enviant
+  V63=nnn (només dígits) — el prefix "ARDMXOne_" és fix i el posa sempre el
+  firmware, mai l'app. El nou nom es desa a NVS i l'ESP32 es reinicia tot
+  seguit perquè el Bluetooth arrenqui amb el nom actualitzat.
 */
 
 // Arduino.h: funcions bàsiques (millis, digitalWrite, Serial, String, etc.)
@@ -67,7 +71,13 @@ constexpr int MAX_MANAGED_CHANNEL = 510;  // fins a quin canal es pot arribar am
 // desa com a màxim un cop transcorregut aquest temps des de l'últim canvi.
 constexpr uint32_t SAVE_DEBOUNCE_MS = 3000;  // temps d'inactivitat abans de desar
 
-const char *BLUETOOTH_DEVICE_NAME = "ARDMXOne_001";  // nom amb què es veu al mòbil en aparellar
+// El nom Bluetooth és sempre "ARDMXOne_" + un número (nnn), mai res més. El
+// prefix és fix al codi; el número es desa a NVS i es pot canviar en calent
+// (amb reinici) des de la pantalla de Debug de l'app.
+const char *BLUETOOTH_NAME_PREFIX = "ARDMXOne_";
+const char *DEFAULT_BLUETOOTH_NAME_SUFFIX = "001";
+constexpr int MAX_BLUETOOTH_NAME_SUFFIX_DIGITS = 3;  // p.ex. "001".."999" — igual que a l'app
+
 const char *FIRMWARE_VERSION_TEXT = "ARDMX One v1.0";  // text que es respon a la petició V62
 
 // ---------------------------------------------------------------------------
@@ -88,6 +98,8 @@ bool sceneDirty = false;        // true = hi ha canvis pendents de desar a la NV
 uint32_t lastChangeMillis = 0;  // instant (millis()) de l'últim canvi de valor
 
 String btFrameBuffer;  // acumula els caràcters d'una trama Bluetooth mentre arriba
+
+String btNameSuffix;  // número actual del nom Bluetooth (part després de "ARDMXOne_")
 
 // ---------------------------------------------------------------------------
 // DMX
@@ -153,6 +165,22 @@ void markDirty() {
   lastChangeMillis = millis();  // guarda "ara" com a últim instant de canvi
 }
 
+// Construeix el nom Bluetooth complet a partir del prefix fix i el número actual.
+String buildDeviceName() {
+  return String(BLUETOOTH_NAME_PREFIX) + btNameSuffix;
+}
+
+// Es crida un cop, a l'arrencada: recupera el número desat (o el de per defecte).
+void loadBtName() {
+  prefs.begin("ardmxone", false);
+  if (prefs.isKey("btsuffix")) {
+    btNameSuffix = prefs.getString("btsuffix", DEFAULT_BLUETOOTH_NAME_SUFFIX);
+  } else {
+    btNameSuffix = DEFAULT_BLUETOOTH_NAME_SUFFIX;
+  }
+  prefs.end();
+}
+
 // ---------------------------------------------------------------------------
 // Selecció de grup de 3 canals (V04-V06 / V07)
 // ---------------------------------------------------------------------------
@@ -167,12 +195,12 @@ void selectGroup(int startChannel) {
   for (int i = 0; i < 3; i++) selectedChannel[i] = startChannel + i;
 }
 
-// Mou la selecció actual un grup de 3 canals endavant (+1) o enrere (-1), amb "volta" als límits.
+// Mou la selecció actual un grup de 3 canals endavant (+1) o enrere (-1), sense volta:
+// si ja s'és al primer grup i es demana enrere (o a l'últim i es demana endavant), no fa res.
 void advanceGroup(int direction) {
-  const int totalGroups = MAX_MANAGED_CHANNEL / 3;               // quants grups de 3 hi ha en total
+  const int totalGroups = MAX_MANAGED_CHANNEL / 3;                    // quants grups de 3 hi ha en total
   const int currentGroup = (groupStart(selectedChannel[0]) - 1) / 3;  // grup actual (0-based)
-  // suma la direcció i fa mòdul perquè, si es passa pels dos costats, torni a l'altre extrem
-  const int nextGroup = ((currentGroup + direction) % totalGroups + totalGroups) % totalGroups;
+  int nextGroup = constrain(currentGroup + direction, 0, totalGroups - 1);  // ancorat als límits
   selectGroup(nextGroup * 3 + 1);  // aplica el nou grup (torna a 1-based)
 }
 
@@ -200,6 +228,35 @@ void replyText(int index, const char *text) {
   SerialBT.print('=');
   SerialBT.print(text);
   SerialBT.print('$');
+}
+
+// Es crida en rebre V63=<número>. Filtra qualsevol caràcter que no sigui un
+// dígit (el prefix "ARDMXOne_" sempre el posa el firmware, mai l'app), desa
+// el nou número a NVS i reinicia l'ESP32 perquè el Bluetooth arrenqui amb el
+// nom actualitzat.
+void handleNameChange(const String &rawInput) {
+  String digitsOnly = "";
+  for (unsigned int i = 0; i < rawInput.length(); i++) {
+    const char c = rawInput.charAt(i);
+    if (isDigit(c)) digitsOnly += c;
+  }
+  if (digitsOnly.length() == 0) return;  // entrada invàlida, no es toca res
+
+  if ((int)digitsOnly.length() > MAX_BLUETOOTH_NAME_SUFFIX_DIGITS) {
+    digitsOnly = digitsOnly.substring(0, MAX_BLUETOOTH_NAME_SUFFIX_DIGITS);
+  }
+
+  prefs.begin("ardmxone", false);
+  prefs.putString("btsuffix", digitsOnly);
+  prefs.end();
+
+  btNameSuffix = digitsOnly;
+  // Confirma el canvi abans de reiniciar, perquè l'app el pugui mostrar al
+  // registre encara que la connexió es talli tot seguit.
+  replyText(63, buildDeviceName().c_str());
+
+  delay(200);  // marge perquè la trama anterior surti abans de tallar el Bluetooth
+  ESP.restart();
 }
 
 // S'executa quan arriba una escriptura "!Vxx=valor$" (valor diferent de "?").
@@ -256,6 +313,10 @@ void handleRequest(int index) {
       // Retorna el text de versió de firmware
       replyText(62, FIRMWARE_VERSION_TEXT);
       break;
+    case 63:
+      // Retorna el nom Bluetooth complet actual (p.ex. "ARDMXOne_001")
+      replyText(63, buildDeviceName().c_str());
+      break;
     default:
       // Qualsevol altre índex sol·licitat (V09, V11, V50, etc.) es queda sense resposta a propòsit
       break;
@@ -273,6 +334,8 @@ void processFrame(const String &body) {
 
   if (rhs == "?") {
     handleRequest(index);       // és una petició de lectura
+  } else if (index == 63) {
+    handleNameChange(rhs);  // V63 és l'únic índex que no és un valor numèric
   } else {
     handleWrite(index, rhs.toInt());  // és una escriptura amb un valor numèric
   }
@@ -329,8 +392,9 @@ void setup() {
   pinMode(STATUS_LED_PIN, OUTPUT);  // configura el pin del LED com a sortida
 
   sceneLoad();                      // recupera l'última escena desada (o zeros)
+  loadBtName();                     // recupera el número del nom Bluetooth (o el de per defecte)
   dmxInit();                        // engega el driver DMX
-  SerialBT.begin(BLUETOOTH_DEVICE_NAME);  // engega el Bluetooth amb el nom del dispositiu
+  SerialBT.begin(buildDeviceName().c_str());  // engega el Bluetooth amb el nom actual
 
   Serial.println("ARDMX One iniciat");  // confirma per Serial que l'arrencada ha anat bé
 }
