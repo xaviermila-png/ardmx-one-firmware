@@ -38,22 +38,23 @@
 // Configuració de maquinari
 // ---------------------------------------------------------------------------
 
-// DMX cap al MAX485 pels pins GPIO17 (TX)/GPIO16 (RX, no usat activament).
+// DMX cap al MAX485 pels pins GPIO22 (TX)/GPIO21 (RX, no usat activament).
 // El mòdul MAX485 té commutació de direcció automàtica per maquinari, per
 // això no hi ha pin DE/RE: es passa -1 com a pin RTS (esp_dmx accepta -1 per
 // dir "no gestionis aquest pin").
 //
 // S'utilitza el port lògic DMX_NUM_1 (no DMX_NUM_2) encaminat per la matriu
-// de GPIO a aquests mateixos pins 17/16 — a l'ESP32 el número de port UART no
-// està lligat a cap pin fix, es pot enrutar per la matriu de GPIO a qualsevol
-// pin. DMX_NUM_2 provoca un crash en temps real (Guru Meditation Error /
-// LoadProhibited dins `dmx_uart_init`/`uart_ll_set_sclk`, confirmat en
-// maquinari) amb la combinació de versions esp_dmx 4.1.0 + aquest framework
-// Arduino-ESP32 — DMX_NUM_1 és el port que fa servir el propi exemple oficial
-// de la llibreria i funciona correctament.
+// de GPIO a aquests pins 22/21 — a l'ESP32 el número de port UART no està
+// lligat a cap pin fix, es pot enrutar per la matriu de GPIO a qualsevol pin
+// d'ús general (21/22 no tenen cap restricció especial, com tampoc en tenien
+// els 17/16 usats abans). DMX_NUM_2 provoca un crash en temps real (Guru
+// Meditation Error / LoadProhibited dins `dmx_uart_init`/`uart_ll_set_sclk`,
+// confirmat en maquinari) amb la combinació de versions esp_dmx 4.1.0 +
+// aquest framework Arduino-ESP32 — DMX_NUM_1 és el port que fa servir el
+// propi exemple oficial de la llibreria i funciona correctament.
 constexpr dmx_port_t DMX_PORT = DMX_NUM_1;  // "port" lògic UART que farem servir per al DMX
-constexpr int DMX_TX_PIN = 17;              // pin físic per on surten les dades DMX cap al MAX485
-constexpr int DMX_RX_PIN = 16;              // pin físic d'entrada (no s'usa, DMX només surt)
+constexpr int DMX_TX_PIN = 22;              // pin físic per on surten les dades DMX cap al MAX485
+constexpr int DMX_RX_PIN = 21;              // pin físic d'entrada (no s'usa, DMX només surt)
 constexpr int DMX_RTS_PIN = -1;             // -1 = no gestionar cap pin de direcció (auto)
 
 // LED d'estat: encès fix amb client Bluetooth connectat, parpellejant si no.

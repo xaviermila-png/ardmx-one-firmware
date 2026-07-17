@@ -7,7 +7,7 @@ protocol implementat: veure els comentaris a `src/main.cpp`.
 
 ## Maquinari
 - ESP32 DevKit V1 (ESP32-WROOM-32)
-- Mòdul MAX485 amb direcció automàtica: GND, VCC, RXD←GPIO17 (TX2), TXD→GPIO16 (RX2, no usat activament)
+- Mòdul MAX485 amb direcció automàtica: GND, VCC, RXD←GPIO22, TXD→GPIO21 (no usat activament)
 - LED d'estat a GPIO2 (encès fix = client Bluetooth connectat, parpelleig = esperant connexió)
 - Alimentació 12V per jack DC (regulador ja integrat a la placa)
 
@@ -19,7 +19,9 @@ protocol implementat: veure els comentaris a `src/main.cpp`.
 5. **PlatformIO: Monitor** (🔌) o `pio device monitor` per veure els logs de debug per USB (115200 baud) — completament independent del DMX i del Bluetooth.
 
 ## Nom del dispositiu Bluetooth
-Es publica com **`ARDMXOne_001`** (`BLUETOOTH_DEVICE_NAME` a `main.cpp`). L'app
-identifica que es tracta d'un ARDMX One pel nom del dispositiu aparellat, no
-per cap camp del protocol — si es fabriquen diverses unitats, cal donar-los
-noms únics (`ARDMXOne_002`, ...) abans de flashejar-les.
+Es publica com **`ARDMXOne_` + un número de 3 xifres** (per defecte `001`,
+desat a NVS). L'app identifica que es tracta d'un ARDMX One pel nom del
+dispositiu aparellat, no per cap camp del protocol — si es fabriquen diverses
+unitats, cal donar-los números únics. Això es pot fer sense reflashejar: des
+de la pantalla de Debug de l'app, un cop connectat, hi ha un camp per
+canviar el número (l'ESP32 el desa i es reinicia tot sol).
