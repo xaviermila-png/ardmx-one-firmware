@@ -10,6 +10,7 @@
     V01-V03  valor actual (0-255) dels 3 canals "visibles"
     V04-V06  número de canal DMX (1-510) seleccionat per a cada un d'ells
     V07      avança/retrocedeix de grup de 3 canals (-1/0/+1)
+    V08      nombre de canals actius (1-512) que realment s'envien per DMX
     V62      versió de firmware (text), demanada per l'app en connectar
 
   La resta d'índexs del mapa V[] de l'ARDMX4 (música, cicle, escenes,
@@ -62,11 +63,12 @@ constexpr int STATUS_LED_PIN = 2;       // pin on va connectat el LED indicador
 constexpr uint32_t LED_BLINK_MS = 500;  // cada quants ms canvia d'estat el parpelleig
 
 // Univers DMX complet (1-512). Les 3 "finestres" de canal que gestiona la
-// pantalla de l'app només poden apuntar a un grup de 3 dins de 1-510 (512 no
-// és múltiple de 3); els canals 511/512 queden fora d'aquesta UI però igualment
-// es transmeten (amb el seu últim valor desat, per defecte 0).
-constexpr int MAX_DMX_CHANNEL = 512;      // nombre total de canals DMX que s'envien
-constexpr int MAX_MANAGED_CHANNEL = 510;  // fins a quin canal es pot arribar amb els sliders
+// pantalla de l'app només poden apuntar a un grup de 3 dins de 1-numeroCanals
+// (per això numeroCanals sempre s'arrodoneix a un múltiple de 3 — vegeu
+// roundDownToMultipleOf3()); els canals per sobre de numeroCanals queden
+// fora d'aquesta UI però igualment es transmeten (amb el seu últim valor
+// desat, per defecte 0).
+constexpr int MAX_DMX_CHANNEL = 512;  // nombre total de canals DMX que s'envien
 
 // Guardat a NVS: no es desa a cada canvi de canal (desgastaria la flash), es
 // desa com a màxim un cop transcorregut aquest temps des de l'últim canvi.
@@ -91,6 +93,20 @@ Preferences prefs;         // objecte que gestiona la lectura/escriptura a la NV
 // Índex 0 = start code DMX (sempre 0). Índexs 1..512 = valors dels canals.
 uint8_t dmxData[DMX_PACKET_SIZE];  // buffer amb TOT l'univers DMX que s'envia cada cicle
 
+// Nombre de canals actius que realment s'envien per DMX. Els canals per
+// sobre d'aquest valor es queden al buffer (amb el seu últim valor) però no
+// s'inclouen a la trama enviada. Sempre és un múltiple de 3 (vegeu
+// roundDownToMultipleOf3()) perquè els 3 sliders de l'app puguin avançar per
+// grups sencers sense mai sobrepassar aquest límit. Per defecte, tot
+// l'univers arrodonit avall (512 no és múltiple de 3).
+int numeroCanals = 510;
+
+// Arrodoneix cap avall al múltiple de 3 més proper (mínim 3).
+int roundDownToMultipleOf3(int value) {
+  if (value < 3) return 3;
+  return (value / 3) * 3;
+}
+
 // Números de canal DMX (1-based) actualment seleccionats per als 3 sliders
 // visibles a la pantalla de l'app (V01-V03 / V04-V06).
 int selectedChannel[3] = {1, 2, 3};  // per defecte, els sliders apunten als canals 1, 2 i 3
@@ -114,11 +130,13 @@ void dmxInit() {
   dmx_set_pin(DMX_PORT, DMX_TX_PIN, DMX_RX_PIN, DMX_RTS_PIN);  // assigna els pins físics al driver
 }
 
-// Envia UNA trama DMX completa (els 512 canals de dmxData) i espera que acabi de sortir.
+// Envia UNA trama DMX (numeroCanals canals de dmxData, no sempre els 512
+// sencers — vegeu numeroCanals) i espera que acabi de sortir.
 void dmxSendFrame() {
-  dmx_write(DMX_PORT, dmxData, DMX_PACKET_SIZE);       // copia dmxData al buffer intern del driver
-  dmx_send_num(DMX_PORT, DMX_PACKET_SIZE);             // comença a transmetre'l pel cable
-  dmx_wait_sent(DMX_PORT, DMX_TIMEOUT_TICK);           // bloqueja fins que la trama ha sortit del tot
+  const int packetSize = numeroCanals + 1;  // +1 pel start code (índex 0)
+  dmx_write(DMX_PORT, dmxData, packetSize);  // copia dmxData al buffer intern del driver
+  dmx_send_num(DMX_PORT, packetSize);        // comença a transmetre'l pel cable
+  dmx_wait_sent(DMX_PORT, DMX_TIMEOUT_TICK);  // bloqueja fins que la trama ha sortit del tot
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +166,16 @@ void sceneLoad() {
     memset(&dmxData[1], 0, MAX_DMX_CHANNEL);  // primera vegada: tots els canals a 0 (apagat)
   }
 
+  // Nombre de canals actius — per defecte tot l'univers (arrodonit) si mai
+  // s'ha desat. Es torna a arrodonir en carregar per si mai queda un valor
+  // desat d'una versió anterior que no apliqués encara aquesta regla.
+  if (prefs.isKey("numch")) {
+    const int stored = constrain((int)prefs.getUInt("numch", MAX_DMX_CHANNEL), 1, MAX_DMX_CHANNEL);
+    numeroCanals = roundDownToMultipleOf3(stored);
+  } else {
+    numeroCanals = roundDownToMultipleOf3(MAX_DMX_CHANNEL);
+  }
+
   prefs.end();          // tanca l'accés a la NVS
   dmxData[0] = 0;        // el primer byte del paquet DMX és sempre el "start code" (0)
 }
@@ -156,6 +184,7 @@ void sceneLoad() {
 void sceneSave() {
   prefs.begin("ardmxone", false);                       // obre l'espai de NVS en escriptura
   prefs.putBytes("scene", &dmxData[1], MAX_DMX_CHANNEL);  // escriu els 512 valors de canal
+  prefs.putUInt("numch", (uint32_t)numeroCanals);         // escriu el nombre de canals actius
   prefs.end();                                          // tanca l'accés a la NVS
   sceneDirty = false;                                   // ja no queden canvis pendents de desar
 }
@@ -199,7 +228,7 @@ void selectGroup(int startChannel) {
 // Mou la selecció actual un grup de 3 canals endavant (+1) o enrere (-1), sense volta:
 // si ja s'és al primer grup i es demana enrere (o a l'últim i es demana endavant), no fa res.
 void advanceGroup(int direction) {
-  const int totalGroups = MAX_MANAGED_CHANNEL / 3;                    // quants grups de 3 hi ha en total
+  const int totalGroups = numeroCanals / 3;  // exacte: numeroCanals sempre és múltiple de 3
   const int currentGroup = (groupStart(selectedChannel[0]) - 1) / 3;  // grup actual (0-based)
   int nextGroup = constrain(currentGroup + direction, 0, totalGroups - 1);  // ancorat als límits
   selectGroup(nextGroup * 3 + 1);  // aplica el nou grup (torna a 1-based)
@@ -280,7 +309,8 @@ void handleWrite(int index, long value) {
     case 5:
     case 6: {
       // V04/V05/V06: l'app tria un nou canal DMX per a un dels 3 sliders
-      const int channel = constrain((int)value, 1, MAX_MANAGED_CHANNEL);  // dins de rang vàlid
+      // (mai més enllà del nombre de canals actius configurat)
+      const int channel = constrain((int)value, 1, numeroCanals);
       selectGroup(groupStart(channel));  // alinea tot el grup de 3 a partir d'aquest canal
       break;
     }
@@ -289,6 +319,23 @@ void handleWrite(int index, long value) {
       if (value > 0) advanceGroup(1);
       else if (value < 0) advanceGroup(-1);
       break;
+    case 8: {
+      // V08: canvia el nombre de canals actius (1-512) que s'envien per DMX
+      // — sempre arrodonit avall a un múltiple de 3 (vegeu numeroCanals)
+      const int requested = constrain((int)value, 1, MAX_DMX_CHANNEL);
+      const int newValue = roundDownToMultipleOf3(requested);
+      if (numeroCanals != newValue) {
+        numeroCanals = newValue;
+        // Si la selecció actual de canals ha quedat fora del nou rang
+        // actiu (numeroCanals s'ha reduït per sota d'on apuntaven els
+        // sliders), la duu de tornada al darrer grup vàlid.
+        if (groupStart(selectedChannel[0]) + 2 > numeroCanals) {
+          selectGroup(numeroCanals - 2);
+        }
+        markDirty();
+      }
+      break;
+    }
     default:
       // Índexs de música/cicle/escenes/reset de l'ARDMX4 no s'implementen aquí.
       break;
@@ -309,6 +356,10 @@ void handleRequest(int index) {
     case 6:
       // Retorna quin número de canal DMX té assignat aquest slot ara mateix
       replyNumber(index, selectedChannel[index - 4]);
+      break;
+    case 8:
+      // Retorna el nombre de canals actius configurat
+      replyNumber(8, numeroCanals);
       break;
     case 62:
       // Retorna el text de versió de firmware
