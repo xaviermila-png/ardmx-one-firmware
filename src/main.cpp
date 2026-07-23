@@ -12,18 +12,24 @@
     V07      avança/retrocedeix de grup de 3 canals (-1/0/+1)
     V08      nombre de canals actius (1-512) que realment s'envien per DMX
     V62      versió de firmware (text), demanada per l'app en connectar
+    V64      identificació del dispositiu (JSON, només lectura)
 
   La resta d'índexs del mapa V[] de l'ARDMX4 (música, cicle, escenes,
   transicions, reset, etc.) no s'implementen — no tenen sentit en aquest
   maquinari i simplement s'ignoren si arriben.
 
-  Identificació del dispositiu: l'app distingeix l'ARDMX One de l'ARDMX4 pel
-  NOM del dispositiu Bluetooth aparellat, que sempre té el format fix
-  "ARDMXOne_nnn" (veure BLUETOOTH_NAME_PREFIX més avall). El número (nnn) de
-  cada unitat es pot canviar des de la pantalla de Debug de l'app enviant
-  V63=nnn (només dígits) — el prefix "ARDMXOne_" és fix i el posa sempre el
-  firmware, mai l'app. El nou nom es desa a NVS i l'ESP32 es reinicia tot
-  seguit perquè el Bluetooth arrenqui amb el nom actualitzat.
+  Nom Bluetooth: el dispositiu sempre té el format fix "ARDMXOne_nnn" (veure
+  BLUETOOTH_NAME_PREFIX més avall). El número (nnn) de cada unitat es pot
+  canviar des de la pantalla de Debug de l'app enviant V63=nnn (només
+  dígits) — el prefix "ARDMXOne_" és fix i el posa sempre el firmware, mai
+  l'app. El nou nom es desa a NVS i l'ESP32 es reinicia tot seguit perquè el
+  Bluetooth arrenqui amb el nom actualitzat.
+
+  Identificació del dispositiu: l'app fa un handshake explícit (V64=?,
+  resposta JSON) en lloc de mirar el nom Bluetooth — així el nom es pot
+  canviar lliurement (V63) sense que això afecti la identificació. El nom
+  només s'usa com a reserva a l'app per si l'ARDMX4 (Mega, firmware congelat)
+  no respon mai V64.
 */
 
 // Arduino.h: funcions bàsiques (millis, digitalWrite, Serial, String, etc.)
@@ -82,6 +88,11 @@ const char *DEFAULT_BLUETOOTH_NAME_SUFFIX = "001";
 constexpr int MAX_BLUETOOTH_NAME_SUFFIX_DIGITS = 3;  // p.ex. "001".."999" — igual que a l'app
 
 const char *FIRMWARE_VERSION_TEXT = "ARDMX One v1.0";  // text que es respon a la petició V62
+
+// Resposta a V64 (identificació). "firmware" és una versió pròpia d'aquest
+// esquema JSON (semver), independent del text humà de V62.
+const char *IDENTIFY_JSON =
+    "{\"tipus\":\"ARDMX_ONE\",\"firmware\":\"1.0.0\",\"num_canals_max\":512}";
 
 // ---------------------------------------------------------------------------
 // Estat global
@@ -368,6 +379,10 @@ void handleRequest(int index) {
     case 63:
       // Retorna el nom Bluetooth complet actual (p.ex. "ARDMXOne_001")
       replyText(63, buildDeviceName().c_str());
+      break;
+    case 64:
+      // Retorna la identificació del dispositiu (JSON, vegeu IDENTIFY_JSON)
+      replyText(64, IDENTIFY_JSON);
       break;
     default:
       // Qualsevol altre índex sol·licitat (V09, V11, V50, etc.) es queda sense resposta a propòsit
