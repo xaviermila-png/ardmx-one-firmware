@@ -19,6 +19,11 @@
              (mateixa indirecció que V01-03/V04-06 — vegeu selectedChannel)
     V68      nom del pessebe (text, fins a 32 caràcters)
     V69      descripció (text, fins a 128 caràcters)
+    V70      consulta/assignació directa d'UN canal explícit (no toca la
+             selecció dels sliders) — pensat per exportar/importar tots els
+             canals actius sense passar pels 3 slots visibles:
+               V70=N            -> consulta, respon "valor|nom" del canal N
+               V70=N|valor|nom  -> assigna valor i nom al canal N
 
   La resta d'índexs del mapa V[] de l'ARDMX4 (música, cicle, escenes,
   transicions, reset, etc.) no s'implementen — no tenen sentit en aquest
@@ -39,6 +44,17 @@
 #include <Arduino.h>
 // esp_dmx: llibreria que genera i envia el senyal DMX512 per un UART de l'ESP32
 #include <esp_dmx.h>
+
+// La pila (stack) per defecte de la tasca loop() en aquest core Arduino-ESP32
+// és de 8 KB — confirmat insuficient en maquinari real: apareixien crashes
+// intermitents (Guru Meditation Error / LoadStoreError dins el controlador
+// DMX, amb el backtrace marcat "CORRUPTED", el símptoma clàssic d'un
+// desbordament de pila) després d'escriure a la NVS (String temporals per
+// als noms de canal, concatenacions de claus, etc. de saveNames()/
+// loadNames()). Es reprodueix igual amb versions anteriors del firmware
+// (no és un bug d'una funció concreta) — cal ampliar la pila abans que
+// aquesta funció es cridi.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 // BluetoothSerial: exposa el Bluetooth Classic (SPP) de l'ESP32 com si fos un Serial més
 #include "BluetoothSerial.h"
 // Preferences: llegeix/escriu dades a la memòria no volàtil (NVS) de l'ESP32
@@ -70,6 +86,20 @@ constexpr int DMX_RTS_PIN = -1;             // -1 = no gestionar cap pin de dire
 // LED d'estat: encès fix amb client Bluetooth connectat, parpellejant si no.
 constexpr int STATUS_LED_PIN = 2;       // pin on va connectat el LED indicador
 constexpr uint32_t LED_BLINK_MS = 500;  // cada quants ms canvia d'estat el parpelleig
+
+// Freqüència d'enviament DMX (40 Hz, l'habitual del protocol). Abans es
+// cridava dmxSendFrame() a cada volta del bucle sense cap límit, tan ràpid
+// com el maquinari ho permetés — això maximitzava la finestra en què una
+// trama DMX activa podia coincidir amb una escriptura a la NVS (confirmat
+// en maquinari: crashes intermitents del controlador DMX just després de
+// desar canvis, sobretot en escriure molt seguit al camp de descripció).
+// Limitar la freqüència deixa marge real entre trames perquè les
+// escriptures a la flash mai coincideixin amb una transmissió activa,
+// mantenint alhora el refresc continu que esperen els receptors DMX (a
+// diferència de només enviar a l'arrencada i en cada canvi de valor, que
+// podria fer que alguns receptors interpretessin l'absència de trames com
+// a pèrdua de senyal).
+constexpr uint32_t DMX_SEND_INTERVAL_MS = 25;
 
 // Univers DMX complet (1-512). Les 3 "finestres" de canal que gestiona la
 // pantalla de l'app només poden apuntar a un grup de 3 dins de 1-numeroCanals
@@ -137,7 +167,8 @@ int roundDownToMultipleOf3(int value) {
 int selectedChannel[3] = {1, 2, 3};  // per defecte, els sliders apunten als canals 1, 2 i 3
 
 bool sceneDirty = false;        // true = hi ha canvis pendents de desar a la NVS
-uint32_t lastChangeMillis = 0;  // instant (millis()) de l'últim canvi de valor
+bool namesDirty = false;        // true = hi ha canvis de noms/pessebe/descripció pendents de desar
+uint32_t lastChangeMillis = 0;  // instant (millis()) de l'últim canvi (escena o noms)
 
 // V41: armat/desarmat del reset de fàbrica (vegeu performFactoryReset()). El
 // nom Bluetooth (V63) NO es toca aquí — un reset de fàbrica només afecta
@@ -149,9 +180,21 @@ String btFrameBuffer;  // acumula els caràcters d'una trama Bluetooth mentre ar
 String btDeviceName;  // nom Bluetooth actual (fins a MAX_BLUETOOTH_NAME_LENGTH caràcters)
 
 // Nom editable de cada canal DMX (1..512), indexat 0-based pel número de
-// canal (channelNames[0] = nom del canal DMX 1). Es desa com UN sol blob a
-// la NVS (vegeu saveNames()) — 512 x 16 bytes = 8 KB, no una clau per canal.
+// canal (channelNames[0] = nom del canal DMX 1). Es desa a la NVS partit en
+// trossos (vegeu CHANNEL_NAME_CHUNK_SIZE / saveNames()) — no en una única
+// entrada, ni tampoc en una clau per canal.
 char channelNames[MAX_DMX_CHANNEL][MAX_CHANNEL_NAME_LENGTH + 1];
+
+// El blob complet de tots els 512 noms (8 KB) no cap en una sola entrada
+// NVS: nvs_set_blob limita cada valor individual a uns pocs KB (confirmat
+// en maquinari real — l'escriptura dels 8 KB fallava sempre, en silenci,
+// perquè el codi no comprovava el valor de retorn de putBytes; els noms
+// semblaven correctes durant la sessió (viuen en RAM) però mai s'arribaven
+// a desar de veritat, i es perdien a cada reinici de l'ESP32). Es parteix
+// en trossos petits, cadascun molt per sota d'aquest límit, cada un amb la
+// seva pròpia clau NVS ("chn0".."chn15").
+constexpr int CHANNEL_NAME_CHUNK_SIZE = 32;  // canals per tros (32 x 16 bytes = 512 bytes/tros)
+constexpr int CHANNEL_NAME_CHUNK_COUNT = MAX_DMX_CHANNEL / CHANNEL_NAME_CHUNK_SIZE;  // 16 trossos
 
 String pessebeName;  // nom del pessebe (V68), lliurement editable
 String descripcio;   // descripció (V69), lliurement editable
@@ -227,10 +270,20 @@ void sceneSave() {
   sceneDirty = false;                                   // ja no queden canvis pendents de desar
 }
 
-// Marca que hi ha un canvi pendent i reinicia el comptador de temps del debounce.
+// Marca que hi ha un canvi pendent (escena) i reinicia el comptador de temps del debounce.
 void markDirty() {
   sceneDirty = true;
   lastChangeMillis = millis();  // guarda "ara" com a últim instant de canvi
+}
+
+// Igual que markDirty() però pels noms/pessebe/descripció — comparteix el
+// mateix debounce que l'escena (vegeu SAVE_DEBOUNCE_MS), important sobretot
+// durant una importació massiva (V70) que pot tocar centenars de canals
+// seguits: sense això, cada canal escriuria els 8 KB del blob de noms a la
+// NVS individualment.
+void markNamesDirty() {
+  namesDirty = true;
+  lastChangeMillis = millis();
 }
 
 // Es crida un cop, a l'arrencada: recupera el nom desat (o el de per defecte).
@@ -256,10 +309,11 @@ String sanitizeName(const String &rawInput) {
   return clean;
 }
 
-// Elimina '!' i '$' (delimitadors de trama del protocol) i retalla a com a
-// màxim maxBytes BYTES — a diferència de sanitizeName(), aquí es permet
-// qualsevol altre caràcter (accents, espais...) perquè aquests camps són
-// text lliure (noms de canal, pessebe, descripció).
+// Elimina '!', '$' i '|' (delimitadors reservats del protocol — '|' separa
+// els camps de V70) i retalla a com a màxim maxBytes BYTES — a diferència
+// de sanitizeName(), aquí es permet qualsevol altre caràcter (accents,
+// espais...) perquè aquests camps són text lliure (noms de canal, pessebe,
+// descripció).
 //
 // El retall és conscient d'UTF-8: si el byte número maxBytes cauria enmig
 // d'un caràcter multibyte (é, ç, l·l...), es retrocedeix fins al final del
@@ -270,7 +324,7 @@ String sanitizeText(const String &rawInput, int maxBytes) {
   String clean = "";
   for (unsigned int i = 0; i < rawInput.length(); i++) {
     const char c = rawInput.charAt(i);
-    if (c != '!' && c != '$') clean += c;
+    if (c != '!' && c != '$' && c != '|') clean += c;
   }
   if ((int)clean.length() <= maxBytes) return clean;
 
@@ -284,13 +338,22 @@ String sanitizeText(const String &rawInput, int maxBytes) {
 void loadNames() {
   prefs.begin("ardmxone", false);
 
-  if (prefs.isKey("chnames")) {
-    const size_t bytesRead =
-        prefs.getBytes("chnames", channelNames, sizeof(channelNames));
-    if (bytesRead != sizeof(channelNames)) {
-      memset(channelNames, 0, sizeof(channelNames));
+  const size_t chunkBytes = CHANNEL_NAME_CHUNK_SIZE * (MAX_CHANNEL_NAME_LENGTH + 1);
+  bool allChunksOk = true;
+  for (int chunk = 0; chunk < CHANNEL_NAME_CHUNK_COUNT; chunk++) {
+    const String key = "chn" + String(chunk);
+    char *dest = &channelNames[chunk * CHANNEL_NAME_CHUNK_SIZE][0];
+    if (!prefs.isKey(key.c_str())) {
+      allChunksOk = false;
+      break;
     }
-  } else {
+    const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
+    if (bytesRead != chunkBytes) {
+      allChunksOk = false;
+      break;
+    }
+  }
+  if (!allChunksOk) {
     memset(channelNames, 0, sizeof(channelNames));
   }
 
@@ -300,16 +363,31 @@ void loadNames() {
   prefs.end();
 }
 
-// Es crida cada cop que canvia un nom de canal, el nom del pessebe o la
-// descripció — es desa a l'instant (no cal el debounce de l'escena: aquí
-// cada canvi ja és una acció puntual de l'usuari en confirmar un camp de
-// text, no un arrossegament continu com els sliders).
+// Es crida quan cal desar els noms/pessebe/descripció a la NVS (des del
+// debounce del loop(), vegeu markNamesDirty()). Cada escriptura es verifica
+// (vegeu el comentari a CHANNEL_NAME_CHUNK_SIZE per l'incident que ho va
+// motivar) — si mai torna a fallar, com a mínim quedarà constància per USB.
 void saveNames() {
   prefs.begin("ardmxone", false);
-  prefs.putBytes("chnames", channelNames, sizeof(channelNames));  // un sol blob pels 512 noms
-  prefs.putString("pessebe", pessebeName);
-  prefs.putString("descripcio", descripcio);
+
+  const size_t chunkBytes = CHANNEL_NAME_CHUNK_SIZE * (MAX_CHANNEL_NAME_LENGTH + 1);
+  for (int chunk = 0; chunk < CHANNEL_NAME_CHUNK_COUNT; chunk++) {
+    const String key = "chn" + String(chunk);
+    const char *src = &channelNames[chunk * CHANNEL_NAME_CHUNK_SIZE][0];
+    if (prefs.putBytes(key.c_str(), src, chunkBytes) != chunkBytes) {
+      Serial.printf("ERROR desant noms de canal (tros %d)\n", chunk);
+    }
+  }
+
+  if (prefs.putString("pessebe", pessebeName) == 0 && pessebeName.length() > 0) {
+    Serial.println("ERROR desant el nom del pessebre");
+  }
+  if (prefs.putString("descripcio", descripcio) == 0 && descripcio.length() > 0) {
+    Serial.println("ERROR desant la descripció");
+  }
+
   prefs.end();
+  namesDirty = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,22 +480,58 @@ void handleChannelNameChange(int index, const String &rawInput) {
   const int channel = selectedChannel[slot];   // canal DMX real d'aquest slot
   const String clean = sanitizeText(rawInput, MAX_CHANNEL_NAME_LENGTH);
   clean.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
-  saveNames();
+  markNamesDirty();
   replyText(index, channelNames[channel - 1]);
 }
 
 // Es crida en rebre V68=<nom nou> (nom del pessebe).
 void handlePessebeNameChange(const String &rawInput) {
   pessebeName = sanitizeText(rawInput, MAX_PESSEBE_NAME_LENGTH);
-  saveNames();
+  markNamesDirty();
   replyText(68, pessebeName.c_str());
 }
 
 // Es crida en rebre V69=<text nou> (descripció).
 void handleDescriptionChange(const String &rawInput) {
   descripcio = sanitizeText(rawInput, MAX_DESCRIPTION_LENGTH);
-  saveNames();
+  markNamesDirty();
   replyText(69, descripcio.c_str());
+}
+
+// Es crida en rebre V70=<...> — consulta o assignació directa d'UN canal
+// explícit (vegeu el bloc de capçalera del fitxer). No toca la selecció
+// dels sliders (selectedChannel): a diferència de V01-03/V04-06/V65-67,
+// aquest índex s'adreça sempre pel número de canal real, pensat perquè
+// l'app pugui exportar/importar tots els canals actius sense passar pels 3
+// slots visibles.
+void handleChannelBulk(const String &rawInput) {
+  const int pipe1 = rawInput.indexOf('|');
+  int channel;
+
+  if (pipe1 == -1) {
+    // Només un número de canal: consulta (no modifica res).
+    channel = constrain(rawInput.toInt(), 1, MAX_DMX_CHANNEL);
+  } else {
+    // "N|valor|nom": assignació directa del valor DMX i del nom.
+    channel = constrain(rawInput.substring(0, pipe1).toInt(), 1, MAX_DMX_CHANNEL);
+    const int pipe2 = rawInput.indexOf('|', pipe1 + 1);
+    const String valuePart = pipe2 == -1 ? rawInput.substring(pipe1 + 1)
+                                          : rawInput.substring(pipe1 + 1, pipe2);
+    const String namePart = pipe2 == -1 ? "" : rawInput.substring(pipe2 + 1);
+
+    const uint8_t newValue = (uint8_t)constrain(valuePart.toInt(), 0, 255);
+    if (dmxData[channel] != newValue) {
+      dmxData[channel] = newValue;
+      markDirty();
+    }
+
+    const String cleanName = sanitizeText(namePart, MAX_CHANNEL_NAME_LENGTH);
+    cleanName.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
+    markNamesDirty();
+  }
+
+  const String reply = String(dmxData[channel]) + "|" + String(channelNames[channel - 1]);
+  replyText(70, reply.c_str());
 }
 
 // S'executa quan arriba una escriptura "!Vxx=valor$" (valor diferent de "?").
@@ -567,6 +681,8 @@ void processFrame(const String &body) {
     handlePessebeNameChange(rhs);  // nom del pessebe
   } else if (index == 69) {
     handleDescriptionChange(rhs);  // descripció
+  } else if (index == 70) {
+    handleChannelBulk(rhs);  // consulta/assignació directa d'un canal (export/import)
   } else {
     handleWrite(index, rhs.toInt());  // és una escriptura amb un valor numèric
   }
@@ -644,6 +760,17 @@ void loop() {
     sceneSave();
     Serial.println("Escena desada a NVS");
   }
+  if (namesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+    saveNames();
+    Serial.println("Noms/pessebe/descripció desats a NVS");
+  }
 
-  dmxSendFrame();  // envia sempre una trama DMX completa a cada volta del bucle
+  // Envia com a màxim cada DMX_SEND_INTERVAL_MS (vegeu el comentari a la
+  // constant) — no a cada volta del bucle sense límit.
+  static uint32_t lastDmxSendMillis = 0;
+  const uint32_t now = millis();
+  if (now - lastDmxSendMillis >= DMX_SEND_INTERVAL_MS) {
+    dmxSendFrame();
+    lastDmxSendMillis = now;
+  }
 }
