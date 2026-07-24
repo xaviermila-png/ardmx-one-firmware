@@ -15,6 +15,10 @@
     V42      confirma el reset de fàbrica (només té efecte si V41 ja és 1)
     V62      versió de firmware (text), demanada per l'app en connectar
     V64      identificació del dispositiu (JSON, només lectura)
+    V65-V67  nom (text) del canal DMX actualment assignat a cada slot 1-3
+             (mateixa indirecció que V01-03/V04-06 — vegeu selectedChannel)
+    V68      nom del pessebe (text, fins a 32 caràcters)
+    V69      descripció (text, fins a 128 caràcters)
 
   La resta d'índexs del mapa V[] de l'ARDMX4 (música, cicle, escenes,
   transicions, reset, etc.) no s'implementen — no tenen sentit en aquest
@@ -85,6 +89,18 @@ constexpr uint32_t SAVE_DEBOUNCE_MS = 3000;  // temps d'inactivitat abans de des
 const char *DEFAULT_BLUETOOTH_NAME = "ARDMXOne";
 constexpr int MAX_BLUETOOTH_NAME_LENGTH = 12;  // igual que el límit de l'app
 
+// Noms editables (canals, pessebe, descripció) — vegeu sanitizeText(),
+// loadNames() i saveNames(). Els límits són en BYTES, no en caràcters: amb
+// accents (é, ç...) un caràcter pot ocupar 2 bytes en UTF-8. Al nom de canal
+// això pot fer perdre 1-2 caràcters en un cas molt accentuat (vegeu
+// sanitizeText per què no es corromp mai el text); a pessebeName/descripcio
+// no hi ha aquesta pressió (no formen part del blob ×512 canals) així que
+// duem un marge folgat perquè els 32/128 caràcters nominals hi càpiguen
+// sempre encara que siguin tots accentuats.
+constexpr int MAX_CHANNEL_NAME_LENGTH = 15;    // bytes — buffer fix, veure capacitat NVS
+constexpr int MAX_PESSEBE_NAME_LENGTH = 96;    // bytes — marge folgat per a 32 caràcters accentuats
+constexpr int MAX_DESCRIPTION_LENGTH = 384;    // bytes — marge folgat per a 128 caràcters accentuats
+
 const char *FIRMWARE_VERSION_TEXT = "ARDMX One v1.0";  // text que es respon a la petició V62
 
 // Resposta a V64 (identificació). "firmware" és una versió pròpia d'aquest
@@ -131,6 +147,14 @@ bool resetArmed = false;
 String btFrameBuffer;  // acumula els caràcters d'una trama Bluetooth mentre arriba
 
 String btDeviceName;  // nom Bluetooth actual (fins a MAX_BLUETOOTH_NAME_LENGTH caràcters)
+
+// Nom editable de cada canal DMX (1..512), indexat 0-based pel número de
+// canal (channelNames[0] = nom del canal DMX 1). Es desa com UN sol blob a
+// la NVS (vegeu saveNames()) — 512 x 16 bytes = 8 KB, no una clau per canal.
+char channelNames[MAX_DMX_CHANNEL][MAX_CHANNEL_NAME_LENGTH + 1];
+
+String pessebeName;  // nom del pessebe (V68), lliurement editable
+String descripcio;   // descripció (V69), lliurement editable
 
 // ---------------------------------------------------------------------------
 // DMX
@@ -232,6 +256,62 @@ String sanitizeName(const String &rawInput) {
   return clean;
 }
 
+// Elimina '!' i '$' (delimitadors de trama del protocol) i retalla a com a
+// màxim maxBytes BYTES — a diferència de sanitizeName(), aquí es permet
+// qualsevol altre caràcter (accents, espais...) perquè aquests camps són
+// text lliure (noms de canal, pessebe, descripció).
+//
+// El retall és conscient d'UTF-8: si el byte número maxBytes cauria enmig
+// d'un caràcter multibyte (é, ç, l·l...), es retrocedeix fins al final del
+// caràcter complet anterior, en lloc de partir-lo pel mig i corrompre el
+// text mostrat després. Als bytes de continuació UTF-8 sempre hi ha el
+// patró de bits 10xxxxxx (màscara 0xC0 == 0x80).
+String sanitizeText(const String &rawInput, int maxBytes) {
+  String clean = "";
+  for (unsigned int i = 0; i < rawInput.length(); i++) {
+    const char c = rawInput.charAt(i);
+    if (c != '!' && c != '$') clean += c;
+  }
+  if ((int)clean.length() <= maxBytes) return clean;
+
+  int cut = maxBytes;
+  while (cut > 0 && (clean.charAt(cut) & 0xC0) == 0x80) cut--;
+  return clean.substring(0, cut);
+}
+
+// Es crida un cop, a l'arrencada: recupera els noms de canal, el nom del
+// pessebe i la descripció (o els deixa buits si mai s'han desat).
+void loadNames() {
+  prefs.begin("ardmxone", false);
+
+  if (prefs.isKey("chnames")) {
+    const size_t bytesRead =
+        prefs.getBytes("chnames", channelNames, sizeof(channelNames));
+    if (bytesRead != sizeof(channelNames)) {
+      memset(channelNames, 0, sizeof(channelNames));
+    }
+  } else {
+    memset(channelNames, 0, sizeof(channelNames));
+  }
+
+  pessebeName = prefs.isKey("pessebe") ? prefs.getString("pessebe", "") : "";
+  descripcio = prefs.isKey("descripcio") ? prefs.getString("descripcio", "") : "";
+
+  prefs.end();
+}
+
+// Es crida cada cop que canvia un nom de canal, el nom del pessebe o la
+// descripció — es desa a l'instant (no cal el debounce de l'escena: aquí
+// cada canvi ja és una acció puntual de l'usuari en confirmar un camp de
+// text, no un arrossegament continu com els sliders).
+void saveNames() {
+  prefs.begin("ardmxone", false);
+  prefs.putBytes("chnames", channelNames, sizeof(channelNames));  // un sol blob pels 512 noms
+  prefs.putString("pessebe", pessebeName);
+  prefs.putString("descripcio", descripcio);
+  prefs.end();
+}
+
 // ---------------------------------------------------------------------------
 // Selecció de grup de 3 canals (V04-V06 / V07)
 // ---------------------------------------------------------------------------
@@ -282,7 +362,7 @@ void replyNumber(int index, long value) {
   SerialBT.print('$');
 }
 
-// Igual que replyNumber() però pel valor de text (només s'usa per V62, la versió de firmware).
+// Igual que replyNumber() però pel valor de text.
 void replyText(int index, const char *text) {
   SerialBT.print('!');
   SerialBT.print('V');
@@ -311,6 +391,33 @@ void handleNameChange(const String &rawInput) {
 
   delay(200);  // marge perquè la trama anterior surti abans de tallar el Bluetooth
   ESP.restart();
+}
+
+// Es crida en rebre V65/V66/V67=<nom nou> — assigna el nom al canal DMX que
+// actualment ocupa aquest slot (mateixa indirecció que V01-03/V04-06). A
+// diferència del nom Bluetooth, no cal reiniciar: és només dada, no afecta
+// la pila BT.
+void handleChannelNameChange(int index, const String &rawInput) {
+  const int slot = index - 65;                // 0, 1 o 2
+  const int channel = selectedChannel[slot];   // canal DMX real d'aquest slot
+  const String clean = sanitizeText(rawInput, MAX_CHANNEL_NAME_LENGTH);
+  clean.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
+  saveNames();
+  replyText(index, channelNames[channel - 1]);
+}
+
+// Es crida en rebre V68=<nom nou> (nom del pessebe).
+void handlePessebeNameChange(const String &rawInput) {
+  pessebeName = sanitizeText(rawInput, MAX_PESSEBE_NAME_LENGTH);
+  saveNames();
+  replyText(68, pessebeName.c_str());
+}
+
+// Es crida en rebre V69=<text nou> (descripció).
+void handleDescriptionChange(const String &rawInput) {
+  descripcio = sanitizeText(rawInput, MAX_DESCRIPTION_LENGTH);
+  saveNames();
+  replyText(69, descripcio.c_str());
 }
 
 // S'executa quan arriba una escriptura "!Vxx=valor$" (valor diferent de "?").
@@ -421,6 +528,20 @@ void handleRequest(int index) {
       // Retorna la identificació del dispositiu (JSON, vegeu IDENTIFY_JSON)
       replyText(64, IDENTIFY_JSON);
       break;
+    case 65:
+    case 66:
+    case 67: {
+      // Retorna el nom del canal DMX actualment assignat a aquest slot
+      const int channel = selectedChannel[index - 65];
+      replyText(index, channelNames[channel - 1]);
+      break;
+    }
+    case 68:
+      replyText(68, pessebeName.c_str());
+      break;
+    case 69:
+      replyText(69, descripcio.c_str());
+      break;
     default:
       // Qualsevol altre índex sol·licitat (V09, V11, V50, etc.) es queda sense resposta a propòsit
       break;
@@ -439,7 +560,13 @@ void processFrame(const String &body) {
   if (rhs == "?") {
     handleRequest(index);       // és una petició de lectura
   } else if (index == 63) {
-    handleNameChange(rhs);  // V63 és l'únic índex que no és un valor numèric
+    handleNameChange(rhs);  // nom Bluetooth
+  } else if (index >= 65 && index <= 67) {
+    handleChannelNameChange(index, rhs);  // nom d'un dels 3 canals seleccionats
+  } else if (index == 68) {
+    handlePessebeNameChange(rhs);  // nom del pessebe
+  } else if (index == 69) {
+    handleDescriptionChange(rhs);  // descripció
   } else {
     handleWrite(index, rhs.toInt());  // és una escriptura amb un valor numèric
   }
@@ -456,7 +583,10 @@ void pollBluetooth() {
       btFrameBuffer = "";
     } else {
       btFrameBuffer += c;  // qualsevol altre caràcter: forma part del contingut de la trama
-      if (btFrameBuffer.length() > 32) btFrameBuffer = "";  // salvaguarda si mai arriba soroll
+      // Salvaguarda si mai arriba soroll. Cal marge per sobre del camp de
+      // text més llarg (V69=descripció, fins a MAX_DESCRIPTION_LENGTH bytes
+      // + "V69=").
+      if (btFrameBuffer.length() > 512) btFrameBuffer = "";
     }
   }
 }
@@ -497,6 +627,7 @@ void setup() {
 
   sceneLoad();                      // recupera l'última escena desada (o zeros)
   loadBtName();                     // recupera el nom Bluetooth (o el de per defecte)
+  loadNames();                      // recupera els noms de canal, pessebe i descripció
   dmxInit();                        // engega el driver DMX
   SerialBT.begin(btDeviceName.c_str());  // engega el Bluetooth amb el nom actual
 
