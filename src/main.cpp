@@ -83,7 +83,7 @@ constexpr int DMX_TX_PIN = 22;              // pin físic per on surten les dade
 constexpr int DMX_RX_PIN = 21;              // pin físic d'entrada (no s'usa, DMX només surt)
 constexpr int DMX_RTS_PIN = -1;             // -1 = no gestionar cap pin de direcció (auto)
 
-// LED d'estat: apagat i quiet sense client Bluetooth connectat, parpellejant si n'hi ha un.
+// LED d'estat: fix encès i quiet sense client Bluetooth connectat, parpellejant si n'hi ha un.
 constexpr int STATUS_LED_PIN = 2;       // pin on va connectat el LED indicador
 constexpr uint32_t LED_BLINK_MS = 500;  // cada quants ms canvia d'estat el parpelleig
 
@@ -711,15 +711,15 @@ void pollBluetooth() {
 // LED d'estat
 // ---------------------------------------------------------------------------
 
-// Actualitza el LED: apagat i quiet si no hi ha cap mòbil connectat,
+// Actualitza el LED: fix encès i quiet si no hi ha cap mòbil connectat,
 // parpellejant si n'hi ha un.
 void updateStatusLed() {
   static uint32_t lastToggle = 0;  // recorda entre crides quan va canviar per última vegada
   static bool ledOn = false;       // recorda entre crides si el LED està encès ara mateix
 
-  if (!SerialBT.hasClient()) {        // ¿no hi ha cap dispositiu Bluetooth connectat?
-    digitalWrite(STATUS_LED_PIN, LOW);  // no: LED apagat i quiet
-    ledOn = false;                      // per si es connecta tot seguit, el parpelleig comença apagat
+  if (!SerialBT.hasClient()) {         // ¿no hi ha cap dispositiu Bluetooth connectat?
+    digitalWrite(STATUS_LED_PIN, HIGH);  // no: LED fix encès i quiet
+    ledOn = true;                        // per si es connecta tot seguit, el parpelleig comença encès
     return;
   }
 
