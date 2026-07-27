@@ -414,15 +414,22 @@ void advanceGroup(int direction) {
 }
 
 // Es crida en rebre V42=1 amb el reset ja armat (V41=1). Torna l'escena
-// (tots els canals a 0) i el nombre de canals actius al seu valor de
-// fàbrica, i ho desa immediatament (no cal esperar el debounce, ja que és
-// una operació explícita i puntual). El nom Bluetooth es manté intacte.
+// (tots els canals a 0), el nombre de canals actius, els noms de canal, el
+// nom del pessebre i la descripció al seu valor de fàbrica, i ho desa
+// immediatament (no cal esperar el debounce, ja que és una operació
+// explícita i puntual). El nom Bluetooth es manté intacte.
 void performFactoryReset() {
   memset(&dmxData[1], 0, MAX_DMX_CHANNEL);          // tots els canals a 0 (apagat)
   numeroCanals = roundDownToMultipleOf3(MAX_DMX_CHANNEL);  // torna al valor de fàbrica
   selectGroup(1);                                    // selecció dels sliders de tornada a 1,2,3
   sceneSave();                                        // desa immediatament (també neteja sceneDirty)
-  Serial.println("Reset de fàbrica: escena i nombre de canals reinicialitzats");
+
+  memset(channelNames, 0, sizeof(channelNames));      // esborra tots els noms de canal
+  pessebeName = "";
+  descripcio = "";
+  saveNames();                                        // desa immediatament (també neteja namesDirty)
+
+  Serial.println("Reset de fàbrica: escena, canals, noms, pessebre i descripció reinicialitzats");
 }
 
 // ---------------------------------------------------------------------------
