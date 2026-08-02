@@ -71,8 +71,8 @@
   maquinari i simplement s'ignoren si arriben.
 
   Nom Bluetooth: lliurement editable des de la pantalla de Configuració de
-  l'app (V63=nomNou) — fins a 12 caràcters, només lletres i dígits (sense
-  espais, accents ni símbols; vegeu sanitizeName()). El nou nom es desa a
+  l'app (V63=nomNou) — fins a 12 caràcters, només lletres, dígits i '_'
+  (sense espais, accents ni altres símbols; vegeu sanitizeName()). El nou nom es desa a
   NVS i l'ESP32 es reinicia tot seguit perquè el Bluetooth arrenqui amb el
   nom actualitzat.
 
@@ -379,13 +379,14 @@ void loadBtName() {
   prefs.end();
 }
 
-// Filtra qualsevol caràcter que no sigui una lletra ASCII o un dígit (sense
-// espais, accents ni símbols) i talla a MAX_BLUETOOTH_NAME_LENGTH.
+// Filtra qualsevol caràcter que no sigui una lletra ASCII, un dígit o '_'
+// (sense espais, accents ni altres símbols) i talla a
+// MAX_BLUETOOTH_NAME_LENGTH.
 String sanitizeName(const String &rawInput) {
   String clean = "";
   for (unsigned int i = 0; i < rawInput.length(); i++) {
     const char c = rawInput.charAt(i);
-    if (isAlphaNumeric(c)) clean += c;
+    if (isAlphaNumeric(c) || c == '_') clean += c;
     if ((int)clean.length() >= MAX_BLUETOOTH_NAME_LENGTH) break;
   }
   return clean;
