@@ -164,7 +164,7 @@ constexpr uint32_t SAVE_DEBOUNCE_MS = 3000;  // temps d'inactivitat abans de des
 // NVS i es pot canviar en calent (amb reinici) des de la pantalla de
 // Configuració de l'app.
 const char *DEFAULT_BLUETOOTH_NAME = "ARDMXOne";
-constexpr int MAX_BLUETOOTH_NAME_LENGTH = 12;  // igual que el límit de l'app
+constexpr int MAX_BLUETOOTH_NAME_LENGTH = 15;  // igual que el límit de l'app
 
 // Noms editables (canals, pessebe, descripció) — vegeu sanitizeText(),
 // loadNames() i saveNames(). Els límits són en BYTES, no en caràcters: amb
