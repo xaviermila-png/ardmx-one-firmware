@@ -58,7 +58,7 @@ l'instal·lador no fa) l'esborraria.
 instal·ladors (`boot_app0.bin` no canvia mai, no cal tornar-lo a copiar).
 
 ## Nom del dispositiu Bluetooth
-Lliurement editable (fins a 12 caràcters, només lletres i xifres) des de la
+Lliurement editable (fins a 15 caràcters, només lletres i xifres) des de la
 pantalla "Configuració del sistema" de l'app, un cop connectat (escriu V63).
 El nou nom es desa a NVS i l'ESP32 es reinicia perquè el Bluetooth arrenqui
 amb el nom actualitzat — cal oblidar i reaparellar el dispositiu des dels
