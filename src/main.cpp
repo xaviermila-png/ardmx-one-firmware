@@ -844,6 +844,15 @@ void handleRequest(int index) {
     case 69:
       replyText(69, descripcio.c_str());
       break;
+    case 76:
+      // Índex separat del 74 (que és l'ACK "OK"/"ERROR" d'activar el PIN) a
+      // propòsit: si es reutilitzés el 74, l'app rebria l'ACK de la
+      // desada com si fos el valor del PIN. Només es pot arribar aquí ja
+      // autenticat (o sense PIN) — vegeu el "gated" a processFrame() —
+      // així que ensenyar-lo no exposa res que qui pregunta no hagi pogut
+      // demostrar ja que sap.
+      replyText(76, storedPin.c_str());
+      break;
     default:
       // Qualsevol altre índex sol·licitat (V09, V11, V50, etc.) es queda sense resposta a propòsit
       break;
