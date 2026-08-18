@@ -180,10 +180,26 @@ constexpr int MAX_DESCRIPTION_LENGTH = 384;    // bytes — marge folgat per a 1
 
 const char *FIRMWARE_VERSION_TEXT = "ARDMX One v1.0";  // text que es respon a la petició V62
 
+// PIN de connexió — opcional (String buida = desactivat, comportament de
+// sempre). Quan n'hi ha un, cap V/T es contesta ni s'aplica (V64, V73, V75
+// són les úniques excepcions) fins que l'app l'enviï correcte per V73. Es
+// desa en clar a NVS (com el nom Bluetooth): no protegeix contra algú amb
+// accés físic a la placa, només contra connectar-se sense voler al dispositiu
+// del veí en una trobada de pessebristes — no cal xifrar-lo per a això.
+constexpr int PIN_LENGTH = 4;
+String storedPin = "";
+bool pinAuthenticated = false;
+
 // Resposta a V64 (identificació). "firmware" és una versió pròpia d'aquest
-// esquema JSON (semver), independent del text humà de V62.
-const char *IDENTIFY_JSON =
-    "{\"tipus\":\"ARDMX_ONE\",\"firmware\":\"1.0.0\",\"num_canals_max\":512}";
+// esquema JSON (semver), independent del text humà de V62. Ara inclou si
+// cal PIN, així que ja no és una constant fixa.
+String buildIdentifyJson() {
+  String json = "{\"tipus\":\"ARDMX_ONE\",\"firmware\":\"1.0.0\",";
+  json += "\"num_canals_max\":512,\"pin\":";
+  json += (storedPin.length() > 0) ? "true" : "false";
+  json += "}";
+  return json;
+}
 
 // ---------------------------------------------------------------------------
 // Configuració BLE — UUIDs generats aleatòriament (uuid4), no reutilitzats de
@@ -377,6 +393,24 @@ void loadBtName() {
     btDeviceName = DEFAULT_BLUETOOTH_NAME;
   }
   prefs.end();
+}
+
+void loadPin() {
+  prefs.begin("ardmxone", false);
+  storedPin = prefs.getString("pin", "");
+  prefs.end();
+}
+
+// Només xifres, exactament PIN_LENGTH — qualsevol altra cosa (buit, massa
+// curt, no numèric) es considera invàlida (String buida de retorn).
+String sanitizePin(const String &rawInput) {
+  String clean = "";
+  for (unsigned int i = 0; i < rawInput.length(); i++) {
+    const char c = rawInput.charAt(i);
+    if (isDigit(c)) clean += c;
+  }
+  if (clean.length() != PIN_LENGTH) return "";
+  return clean;
 }
 
 // Filtra qualsevol caràcter que no sigui una lletra ASCII, un dígit o '_'
@@ -588,6 +622,43 @@ void handleNameChange(const String &rawInput) {
   ESP.restart();
 }
 
+// V73: l'app hi envia el PIN per autenticar-se just després de connectar.
+// Sempre es processa (encara que ja calgui PIN i no s'hagi enviat encara),
+// és precisament l'única manera d'arribar a autenticar-se.
+void handlePinVerify(const String &rawInput) {
+  const String attempt = sanitizePin(rawInput);
+  pinAuthenticated = storedPin.length() > 0 && attempt == storedPin;
+  replyText(73, pinAuthenticated ? "OK" : "ERROR");
+}
+
+// V74: posar/canviar el PIN — només té efecte si ja estàs autenticat (o si
+// encara no hi havia cap PIN, cas en què "autenticat" ja és cert per
+// definició, vegeu la comprovació al capdamunt de processFrame()).
+void handlePinSet(const String &rawInput) {
+  const String clean = sanitizePin(rawInput);
+  if (clean.length() == 0) return;
+
+  prefs.begin("ardmxone", false);
+  prefs.putString("pin", clean);
+  prefs.end();
+
+  storedPin = clean;
+  replyText(74, "OK");
+}
+
+// V75: restableix el PIN (torna a "sense PIN"). Sempre s'accepta,
+// independentment de pinAuthenticated — vegeu el comentari de storedPin
+// sobre per què això és acceptable per l'amenaça real que es vol evitar.
+void handlePinReset(const String &rawInput) {
+  prefs.begin("ardmxone", false);
+  prefs.remove("pin");
+  prefs.end();
+
+  storedPin = "";
+  pinAuthenticated = false;
+  replyText(75, "OK");
+}
+
 // Es crida en rebre V65/V66/V67=<nom nou> — assigna el nom al canal DMX que
 // actualment ocupa aquest slot (mateixa indirecció que V01-03/V04-06). A
 // diferència del nom Bluetooth, no cal reiniciar: és només dada, no afecta
@@ -756,8 +827,8 @@ void handleRequest(int index) {
       replyText(63, btDeviceName.c_str());
       break;
     case 64:
-      // Retorna la identificació del dispositiu (JSON, vegeu IDENTIFY_JSON)
-      replyText(64, IDENTIFY_JSON);
+      // Retorna la identificació del dispositiu (JSON, vegeu buildIdentifyJson())
+      replyText(64, buildIdentifyJson().c_str());
       break;
     case 65:
     case 66:
@@ -788,6 +859,13 @@ void processFrame(const String &body) {
   const int index = body.substring(1, eq).toInt();  // el número entre "V" i "=" -> índex (p.ex. 4)
   const String rhs = body.substring(eq + 1);         // tot el que hi ha després del "=" -> valor
 
+  // Mentre calgui PIN i encara no s'hagi enviat el correcte, només es
+  // processen V64 (identificació — cal per saber que fa falta PIN), V73
+  // (verificar-lo) i V75 (restablir-lo) — tota la resta es descarta en
+  // silenci, tant lectures com escriptures.
+  const bool gated = storedPin.length() > 0 && !pinAuthenticated;
+  if (gated && index != 64 && index != 73 && index != 75) return;
+
   if (rhs == "?") {
     handleRequest(index);       // és una petició de lectura
   } else if (index == 63) {
@@ -800,6 +878,12 @@ void processFrame(const String &body) {
     handleDescriptionChange(rhs);  // descripció
   } else if (index == 70) {
     handleChannelBulk(rhs);  // consulta/assignació directa d'un canal (export/import)
+  } else if (index == 73) {
+    handlePinVerify(rhs);
+  } else if (index == 74) {
+    handlePinSet(rhs);
+  } else if (index == 75) {
+    handlePinReset(rhs);
   } else {
     handleWrite(index, rhs.toInt());  // és una escriptura amb un valor numèric
   }
@@ -849,6 +933,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
     bleClientConnected = true;
     bleConnHandle = desc->conn_handle;
+    pinAuthenticated = false;
   }
 
   void onDisconnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
@@ -943,6 +1028,7 @@ void setup() {
 
   sceneLoad();                      // recupera l'última escena desada (o zeros)
   loadBtName();                     // recupera el nom Bluetooth (o el de per defecte)
+  loadPin();                        // recupera el PIN de connexió (o cap, per defecte)
   loadNames();                      // recupera els noms de canal, pessebe i descripció
   dmxInit();                        // engega el driver DMX
 
