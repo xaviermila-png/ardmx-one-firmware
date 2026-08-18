@@ -1,0 +1,46 @@
+ARDMX One — instal·lador de firmware
+=====================================
+
+Aquest paquet instal·la el firmware de l'ARDMX One a una placa ESP32,
+sense necessitat de tenir res més instal·lat (ni Python, ni PlatformIO,
+ni Arduino IDE).
+
+Passos
+------
+1. Descomprimeix aquest ZIP a qualsevol carpeta de l'ordinador
+   (per exemple a l'Escriptori).
+
+2. Connecta la placa ESP32 a l'ordinador amb un cable USB.
+   IMPORTANT: el cable ha de ser de dades, no només de càrrega.
+
+3. Dins la carpeta descomprimida, fes doble clic a:
+       install_ardmx_one.bat
+
+4. S'obrirà una finestra negra (símbol del sistema). Mostrarà els ports
+   COM disponibles i, si detecta l'ESP32, en recomanarà un
+   automàticament (per exemple "COM10"). Pots:
+     - Prémer només Enter per fer servir el port recomanat, o
+     - Escriure un altre port COM i prémer Enter.
+
+5. Espera unes desenes de segons mentre flasheja. NO desendollis el
+   cable durant aquest procés.
+
+6. Al final ha d'aparèixer el missatge:
+       Firmware instal·lat correctament.
+   Prem qualsevol tecla per tancar la finestra.
+
+Si hi ha algun error
+---------------------
+- Comprova que el cable USB sigui de dades (n'hi ha que només carreguen).
+- Comprova que el port COM triat sigui el correcte (torna a executar
+  el .bat i mira la llista de ports).
+- Si Windows no reconeix la placa, pot caldre instal·lar el controlador
+  del xip USB-sèrie (normalment CH340) — es troba fàcilment cercant
+  "driver CH340" al navegador.
+
+Notes
+-----
+- Aquest instal·lador NO esborra la configuració ja desada a la placa
+  (noms de canal, escena, nom Bluetooth...).
+- Tots els fitxers d'aquesta carpeta (esptool.exe, els .bin, el .ps1)
+  són necessaris — no separis el .bat de la resta.
