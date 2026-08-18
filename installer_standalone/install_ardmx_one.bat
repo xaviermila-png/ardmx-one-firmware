@@ -23,10 +23,21 @@ if not exist "%BINDIR%\firmware.bin" (
 
 echo Ports serie disponibles:
 echo.
-mode | findstr /i "COM"
+set "AUTOPORT="
+for /f "usebackq tokens=1,* delims=:" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0detect_port.ps1"`) do (
+    if "%%A"=="LIST" echo   - %%B
+    if "%%A"=="RECOMMENDED" set "AUTOPORT=%%B"
+)
 echo.
 
-set /p COMPORT="Escriu el port COM del ESP32 (per exemple COM10) i prem Enter: "
+if defined AUTOPORT (
+    echo Port recomanat, sembla l'ESP32: %AUTOPORT%
+    echo.
+    set /p COMPORT="Escriu el port COM, o prem Enter per fer servir %AUTOPORT%: "
+    if "!COMPORT!"=="" set "COMPORT=!AUTOPORT!"
+) else (
+    set /p COMPORT="Escriu el port COM del ESP32, per exemple COM10, i prem Enter: "
+)
 
 if "%COMPORT%"=="" (
     echo No has escrit cap port. Sortint.
