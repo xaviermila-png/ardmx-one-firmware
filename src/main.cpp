@@ -298,6 +298,11 @@ char channelNames[MAX_DMX_CHANNEL][MAX_CHANNEL_NAME_LENGTH + 1];
 constexpr int CHANNEL_NAME_CHUNK_SIZE = 32;  // canals per tros (32 x 16 bytes = 512 bytes/tros)
 constexpr int CHANNEL_NAME_CHUNK_COUNT = MAX_DMX_CHANNEL / CHANNEL_NAME_CHUNK_SIZE;  // 16 trossos
 
+// Quins dels 16 trossos de noms tenen canvis pendents — saveNames() només
+// reescriu aquests, no tots 16 (vegeu el mateix mecanisme/motiu a
+// canalsChunkDirty[], més avall).
+bool namesChunkDirty[CHANNEL_NAME_CHUNK_COUNT] = {false};
+
 String pessebeName;  // nom del pessebe (V68), lliurement editable
 String descripcio;   // descripció (V69), lliurement editable
 
@@ -361,6 +366,17 @@ constexpr int CHANNEL_CHUNK_COUNT = MAX_DMX_CHANNEL / CHANNEL_CHUNK_SIZE;  // 16
 
 bool canalsDirty = false;  // true = hi ha canvis d'escenes pendents de desar a la NVS
 
+// Quins dels 16 trossos tenen canvis pendents — editar UN canal (p.ex.
+// arrossegar un slider o canviar-li la transició) només toca 1-2 trossos com
+// a molt, però saveCanals() reescrivia sempre els 16 sencers (les 512
+// entrades DMX) a cada desat debounced. Cada escriptura NVS bloqueja loop()
+// (DMX inclòs) uns quants ms; multiplicat per 16 trossos, un simple canvi
+// petit congelava perceptiblement la sortida DMX i el poll de l'app —
+// exactament el "s'encalla" reportat en maquinari real amb l'ús normal
+// (arrossegar sliders, canviar transicions). Ara saveCanals() només
+// reescriu els trossos marcats aquí.
+bool canalsChunkDirty[CHANNEL_CHUNK_COUNT] = {false};
+
 // Blob NVS amb tot el que no són els valors de canal (que van a part, per
 // trossos): escena/nombre d'escenes actives, selector principal, durades
 // dels 8 períodes del cicle (escena/transició alternades) i les 4 transicions.
@@ -395,7 +411,7 @@ bool cicloEnCurso = false;
 // a .ino), per tant no hi ha generació automàtica de prototips — cal
 // declarar-les aquí perquè "Canals" (més avall) les crida abans que la seva
 // definició (a "Persistència") aparegui al fitxer.
-void markCanalsDirty();
+void markCanalsDirty(int channelIndex0);
 void markParamEscenesDirty();
 
 // ---------------------------------------------------------------------------
@@ -439,7 +455,7 @@ void guardarEnviarValor(int i, int escenaIndex, int nuevoValor) {
   if (escenaIndex < 0 || escenaIndex >= 4) return;
   canalsData[i].valors[escenaIndex] = constrain(nuevoValor, 0, 255);
   valorActual[i] = canalsData[i].valors[escenaIndex];
-  markCanalsDirty();
+  markCanalsDirty(i);
 }
 
 // ---------------------------------------------------------------------------
@@ -532,11 +548,21 @@ void markDirty() {
   lastChangeMillis = millis();  // guarda "ara" com a últim instant de canvi
 }
 
-// Marca que hi ha canvis pendents als valors de canal de les 4 escenes
-// (canalsData) — mateix debounce compartit que la resta (lastChangeMillis).
-void markCanalsDirty() {
+// Marca que hi ha canvis pendents al canal DMX channelIndex0 (0-based) a les
+// 4 escenes (canalsData) — mateix debounce compartit que la resta
+// (lastChangeMillis). Només marca dirty el tros NVS que conté aquest canal
+// (vegeu canalsChunkDirty[]), no tots 16.
+void markCanalsDirty(int channelIndex0) {
+  canalsChunkDirty[channelIndex0 / CHANNEL_CHUNK_SIZE] = true;
   canalsDirty = true;
   lastChangeMillis = millis();
+}
+
+// Marca TOTS els trossos com a pendents — només per a un reset de fàbrica
+// (memset complet, cal reescriure-ho tot de veritat).
+void markAllCanalsDirty() {
+  for (int i = 0; i < CHANNEL_CHUNK_COUNT; i++) canalsChunkDirty[i] = true;
+  canalsDirty = true;
 }
 
 // Marca que hi ha canvis pendents als paràmetres d'escenes/cicle/transicions.
@@ -583,11 +609,13 @@ void saveCanals() {
 
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
+    if (!canalsChunkDirty[chunk]) continue;
     const String key = "chv" + String(chunk);
     const CanalData *src = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
     if (prefs.putBytes(key.c_str(), src, chunkBytes) != chunkBytes) {
       Serial.printf("ERROR desant valors de canal (tros %d)\n", chunk);
     }
+    canalsChunkDirty[chunk] = false;
   }
 
   prefs.end();
@@ -644,9 +672,21 @@ void saveParamEscenes() {
 // durant una importació massiva (V70) que pot tocar centenars de canals
 // seguits: sense això, cada canal escriuria els 8 KB del blob de noms a la
 // NVS individualment.
-void markNamesDirty() {
+// channelIndex0 (0-based): quin canal ha canviat de nom, per marcar només el
+// seu tros com a pendent (vegeu namesChunkDirty[]/saveNames()). -1 (per
+// defecte) quan el canvi és pessebeName/descripcio, que no viuen en cap
+// tros — saveNames() sempre els reescriu igualment (2 crides curtes, no
+// val la pena fer-ne un seguiment a part).
+void markNamesDirty(int channelIndex0 = -1) {
+  if (channelIndex0 >= 0) namesChunkDirty[channelIndex0 / CHANNEL_NAME_CHUNK_SIZE] = true;
   namesDirty = true;
   lastChangeMillis = millis();
+}
+
+// Mateix motiu que markAllCanalsDirty() — només per a un reset de fàbrica.
+void markAllNamesDirty() {
+  for (int i = 0; i < CHANNEL_NAME_CHUNK_COUNT; i++) namesChunkDirty[i] = true;
+  namesDirty = true;
 }
 
 // Es crida un cop, a l'arrencada: recupera el nom desat (o el de per defecte).
@@ -754,11 +794,13 @@ void saveNames() {
 
   const size_t chunkBytes = CHANNEL_NAME_CHUNK_SIZE * (MAX_CHANNEL_NAME_LENGTH + 1);
   for (int chunk = 0; chunk < CHANNEL_NAME_CHUNK_COUNT; chunk++) {
+    if (!namesChunkDirty[chunk]) continue;
     const String key = "chn" + String(chunk);
     const char *src = &channelNames[chunk * CHANNEL_NAME_CHUNK_SIZE][0];
     if (prefs.putBytes(key.c_str(), src, chunkBytes) != chunkBytes) {
       Serial.printf("ERROR desant noms de canal (tros %d)\n", chunk);
     }
+    namesChunkDirty[chunk] = false;
   }
 
   if (prefs.putString("pessebe", pessebeName) == 0 && pessebeName.length() > 0) {
@@ -1122,6 +1164,7 @@ void performFactoryReset() {
   // primer TipusTransicio de l'enum és LINEAL=0), no cal cap bucle a part.
   memset(canalsData, 0, sizeof(canalsData));
   for (int i = 0; i < MAX_DMX_CHANNEL; i++) valorActual[i] = 0;
+  markAllCanalsDirty();
   saveCanals();
 
   ParamEscenes.EscenaActiva = 1;
@@ -1139,6 +1182,7 @@ void performFactoryReset() {
   memset(channelNames, 0, sizeof(channelNames));
   pessebeName = "";
   descripcio = "";
+  markAllNamesDirty();
   saveNames();
 
   InicialitzarPrograma();
@@ -1265,7 +1309,7 @@ void handleChannelNameChange(int index, const String &rawInput) {
   const int channel = selectedChannel[slot];   // canal DMX real d'aquest slot
   const String clean = sanitizeText(rawInput, MAX_CHANNEL_NAME_LENGTH);
   clean.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
-  markNamesDirty();
+  markNamesDirty(channel - 1);
   replyText(index, channelNames[channel - 1]);
 }
 
@@ -1325,8 +1369,8 @@ void handleChannelBulk4Scene(const String &rawInput) {
     }
     nom.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
 
-    markCanalsDirty();
-    markNamesDirty();
+    markCanalsDirty(channel - 1);
+    markNamesDirty(channel - 1);
 
     // Si el canal assignat és un dels 3 seleccionats, V[1-3] queda
     // desactualitzat i Escenes() (que segueix corrent mentre aquesta
@@ -1758,19 +1802,25 @@ void loop() {
     }
   }
 
-  // Si hi ha canvis pendents i ja ha passat prou temps sense nous canvis, desa a NVS
+  // Si hi ha canvis pendents i ja ha passat prou temps sense nous canvis,
+  // desa a NVS — com a màxim UN d'aquests per volta (else if, no if
+  // independents): cada desat ja bloqueja loop()/DMX uns ms mentre escriu a
+  // flash, i com que sceneDirty/namesDirty/canalsDirty/paramEscenesDirty
+  // comparteixen el mateix lastChangeMillis, més d'un podia arribar dirty
+  // alhora (p.ex. una assignació via V71 marca canalsDirty i namesDirty
+  // juntes) — fer-los tots dins la mateixa volta apilava els bloquejos en
+  // un de sol, més llarg i notable. Amb com a màxim un per volta, els
+  // pendents es reparteixen en voltes consecutives (uns ms de diferència,
+  // imperceptible).
   if (sceneDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     sceneSave();
     Serial.println("Escena desada a NVS");
-  }
-  if (namesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+  } else if (namesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     saveNames();
     Serial.println("Noms/pessebe/descripció desats a NVS");
-  }
-  if (canalsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+  } else if (canalsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     saveCanals();
-  }
-  if (paramEscenesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+  } else if (paramEscenesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     saveParamEscenes();
   }
 
