@@ -1355,12 +1355,19 @@ void handleWrite(int index, long value) {
       // (mai més enllà del nombre de canals actius configurat)
       const int channel = constrain((int)value, 1, numeroCanals);
       selectGroup(groupStart(channel));  // alinea tot el grup de 3 a partir d'aquest canal
+      // Sense això, V[1-3] es queda amb els valors del grup anterior:
+      // l'app els llegiria desactualitzats i, pitjor encara, el següent
+      // tick d'Escenes() els confondria amb una edició manual de l'usuari
+      // i sobreescriuria els valors del nou grup amb els antics. Mateix
+      // motiu que la crida després d'assignar un canal via V71.
+      RecuperarValorsCanals();
       break;
     }
     case 7:
       // V07: l'app demana avançar (+1) o retrocedir (-1) al grup de 3 canals següent/anterior
       if (value > 0) advanceGroup(1);
       else if (value < 0) advanceGroup(-1);
+      RecuperarValorsCanals();
       break;
     case 8: {
       // V08: canvia el nombre de canals actius (1-512) que s'envien per DMX
