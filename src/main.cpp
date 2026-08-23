@@ -298,6 +298,93 @@ String pessebeName;  // nom del pessebe (V68), lliurement editable
 String descripcio;   // descripció (V69), lliurement editable
 
 // ---------------------------------------------------------------------------
+// Escenes / Transicions (firmware v2) — 4 escenes estàtiques + 4 transicions
+// globals entre parells consecutius (cíclic: escena 4 -> escena 1). Substitueix
+// el buffer únic `dmxData` editat en directe (comportament v1) per un model amb
+// escena activa + interpolació — mateix disseny que ardmx4-evo-firmware, aquí
+// portat sense res d'àudio/cicle-per-pulsador (maquinari sense DFPlayer/trigger).
+// ---------------------------------------------------------------------------
+
+// Tipus de transició entre dues escenes consecutives. SALT és l'únic que fa
+// servir saltPercent (percentatge del temps de la transició en què es
+// produeix el salt instantani); la resta l'ignoren.
+enum TipusTransicio : uint8_t { LINEAL = 0, SALT = 1, EASE_IN = 2, EASE_OUT = 3 };
+
+struct Transicio {
+  TipusTransicio tipus;
+  uint8_t saltPercent;  // 0-100, només rellevant si tipus==SALT
+};
+
+// Interpola el valor (0-255) d'un canal entre l'escena origen (v0) i destí
+// (v1) segons el progrés de la transició (t_pct, 0-1000 mil·lèsimes). Tot en
+// enters (sense floats) per eficiència a l'ESP32.
+uint8_t interpolar(uint8_t v0, uint8_t v1, uint16_t t_pct, TipusTransicio tipus, uint8_t salt_pct) {
+  switch (tipus) {
+    case SALT:
+      return (t_pct < (uint16_t)salt_pct * 10) ? v0 : v1;
+    case EASE_OUT: {
+      // Ràpid al principi, s'alenteix al final: f(t) = 1-(1-t)^2
+      int32_t inv = 1000 - (int32_t)t_pct;
+      int32_t f = 1000 - (inv * inv) / 1000;
+      return (uint8_t)(v0 + ((int32_t)(v1 - v0) * f) / 1000);
+    }
+    case EASE_IN: {
+      // Lent al principi, accelera al final: f(t) = t^2
+      int32_t f = ((int32_t)t_pct * t_pct) / 1000;
+      return (uint8_t)(v0 + ((int32_t)(v1 - v0) * f) / 1000);
+    }
+    case LINEAL:
+    default:
+      return (uint8_t)(v0 + ((int32_t)(v1 - v0) * t_pct) / 1000);
+  }
+}
+
+// Valor (0-255) de cada canal a cadascuna de les 4 escenes.
+struct CanalData {
+  uint8_t valors[4];
+};
+
+CanalData canalsData[MAX_DMX_CHANNEL];       // per canal DMX (0-based), 4 valors (una per escena)
+float valorActual[MAX_DMX_CHANNEL];          // valor interpolat que s'envia ara mateix per DMX
+Transicio transicions[4];                    // transicions[i]: escena i+1 -> escena ((i+1)%4)+1
+
+constexpr int CHANNEL_CHUNK_SIZE = 32;  // canals per tros de NVS, mateix patró que channelNames
+constexpr int CHANNEL_CHUNK_COUNT = MAX_DMX_CHANNEL / CHANNEL_CHUNK_SIZE;  // 16 trossos
+
+bool canalsDirty = false;  // true = hi ha canvis d'escenes pendents de desar a la NVS
+
+// Blob NVS amb tot el que no són els valors de canal (que van a part, per
+// trossos): escena/nombre d'escenes actives, selector principal, durades
+// dels 8 períodes del cicle (escena/transició alternades) i les 4 transicions.
+struct ParametresEscenes {
+  int EscenaActiva;
+  int NumeroEscenes;
+  int EstatSelector;
+  uint32_t tempsPeriodes[8];  // microsegons
+  Transicio transicions[4];
+};
+ParametresEscenes ParamEscenes;
+bool paramEscenesDirty = false;
+
+// ---- Estat de la màquina d'estats de cicle/escenes (mateix disseny que EVO) ----
+int EscenaActiva = 1;       // V09, 1-4
+int NumeroEscenes = 4;      // V18
+int EstatSelector = 0;      // V11: 1=Automàtic, 3-6=Escena fixa N, 7=Config (sense Trigger, l'One no en té)
+int num_periodes = NumeroEscenes * 2;
+
+uint32_t Temps[8];              // durada de cada període (escena/transició alternades), microsegons
+uint32_t TempsAcumulat[8];      // temps acumulat (per validar seqüència i mostrar a l'app), segons
+uint32_t tiempoTotalCiclo = 0;  // microsegons
+
+uint32_t tempsActualEstat = 0, referenciaTempsEstat = 0;
+uint32_t tempsActualCicle = 0, referenciaTempsCicle = 0;
+uint32_t tempsActualTransicio = 0, referenciaTempsTransicio = 0;
+uint32_t contadorPuntTransicio = 0, numeroPuntsTransicio = 0;
+constexpr uint32_t tempsCiclesTransicio = 10000;  // microsegons (>= 10000), pas d'interpolació
+int EstatActual = 0, EstatAntic = 0;
+bool cicloEnCurso = false;
+
+// ---------------------------------------------------------------------------
 // DMX
 // ---------------------------------------------------------------------------
 
