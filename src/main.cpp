@@ -384,6 +384,56 @@ constexpr uint32_t tempsCiclesTransicio = 10000;  // microsegons (>= 10000), pas
 int EstatActual = 0, EstatAntic = 0;
 bool cicloEnCurso = false;
 
+// Declaracions avançades: aquest fitxer es compila com a .cpp normal (no com
+// a .ino), per tant no hi ha generació automàtica de prototips — cal
+// declarar-les aquí perquè "Canals" (més avall) les crida abans que la seva
+// definició (a "Persistència") aparegui al fitxer.
+void markCanalsDirty();
+void markParamEscenesDirty();
+
+// ---------------------------------------------------------------------------
+// Canals — funcions equivalents a les de ardmx4-evo-firmware, adaptades al
+// nou model de transició global (interpolar()) en lloc del mode per canal.
+// ---------------------------------------------------------------------------
+
+// Aplica directament el valor d'una escena fixa al canal (sense interpolar).
+// Rep un "estat" de cicle (0-7: parell=escena fixa, senar=transició), MAI un
+// índex d'escena directe — cal dividir per 2 abans d'indexar `valors[4]`
+// (mida 4). Sense aquesta divisió, l'escena 2 llegiria els valors de
+// l'escena 3 i les escenes 3/4 llegirien fora dels límits de l'array —
+// mateix bug ja detectat i corregit a ardmx4-evo-firmware, cal no
+// reintroduir-lo aquí.
+void actualizarCanalFix(int i, int estat) {
+  const int escenaIndex = estat / 2;
+  valorActual[i] = canalsData[i].valors[escenaIndex];
+}
+
+// Un pas d'interpolació entre l'escena origen i la següent, segons el tipus
+// de transició GLOBAL que toqui (transicions[escenaIndex]) — a diferència de
+// ardmx4-evo-firmware v1, aquí no hi ha mode per canal.
+void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
+  const int escenaIndex = estatActual / 2;  // mateixa divisió que actualizarCanalFix
+  const uint8_t v0 = canalsData[i].valors[escenaIndex];
+  const uint8_t v1 = canalsData[i].valors[(escenaIndex + 1) % 4];
+  const Transicio &tr = transicions[escenaIndex];
+  valorActual[i] = interpolar(v0, v1, t_pct, tr.tipus, tr.saltPercent);
+}
+
+void enviarCanalEscena(int i, int escenaIndex) {
+  if (escenaIndex < 0 || escenaIndex >= 4) return;
+  valorActual[i] = canalsData[i].valors[escenaIndex];
+}
+
+// Assigna un valor a una escena concreta d'un canal, des de l'edició en
+// directe dels 3 sliders visibles (V01-03) — desa immediatament (via
+// markCanalsDirty()/el debounce del loop()).
+void guardarEnviarValor(int i, int escenaIndex, int nuevoValor) {
+  if (escenaIndex < 0 || escenaIndex >= 4) return;
+  canalsData[i].valors[escenaIndex] = constrain(nuevoValor, 0, 255);
+  valorActual[i] = canalsData[i].valors[escenaIndex];
+  markCanalsDirty();
+}
+
 // ---------------------------------------------------------------------------
 // DMX
 // ---------------------------------------------------------------------------
@@ -726,23 +776,354 @@ void advanceGroup(int direction) {
   selectGroup(nextGroup * 3 + 1);  // aplica el nou grup (torna a 1-based)
 }
 
-// Es crida en rebre V42=1 amb el reset ja armat (V41=1). Torna l'escena
-// (tots els canals a 0), el nombre de canals actius, els noms de canal, el
-// nom del pessebre i la descripció al seu valor de fàbrica, i ho desa
-// immediatament (no cal esperar el debounce, ja que és una operació
-// explícita i puntual). El nom Bluetooth es manté intacte.
-void performFactoryReset() {
-  memset(&dmxData[1], 0, MAX_DMX_CHANNEL);          // tots els canals a 0 (apagat)
-  numeroCanals = roundDownToMultipleOf3(MAX_DMX_CHANNEL);  // torna al valor de fàbrica
-  selectGroup(1);                                    // selecció dels sliders de tornada a 1,2,3
-  sceneSave();                                        // desa immediatament (també neteja sceneDirty)
+// ---------------------------------------------------------------------------
+// Cicle / Escenes (v2) — portat gairebé literalment de ardmx4-evo-firmware,
+// sense res d'àudio (DFPlayer/cançó/volum) ni del mode Trigger (EstatSelector
+// ==2, requereix un pin físic que aquesta placa no té). Els noms de funció es
+// mantenen idèntics als de l'EVO a propòsit, per poder comparar els dos
+// fitxers costat a costat en revisions futures. V04-V08/V41/V42 NO passen
+// per aquí — es queden amb el seu propi mecanisme ja existent de v1
+// (selectedChannel[]/numeroCanals/resetArmed), sense cap canvi.
+// ---------------------------------------------------------------------------
 
-  memset(channelNames, 0, sizeof(channelNames));      // esborra tots els noms de canal
+// Array genèric on viuen els índexs V01-03/V09-18/V21-28/V35/V50 (mateix
+// patró que ardmx4-evo-firmware).
+constexpr int V_SIZE = 60;
+float V[V_SIZE] = {0};
+
+String EstatPlay = "Stop";  // "Stop"/"Play"/"Pausa" — mateixos noms que l'EVO tot i no haver-hi àudio
+String text1 = " ";         // missatge d'estat/error del cicle (p.ex. "Error seqüencia")
+uint32_t pausaCicleInici = 0;
+
+void apagarTotsElsCanals() {
+  for (int i = 0; i < MAX_DMX_CHANNEL; i++) valorActual[i] = 0;
+}
+
+bool verificarSequenciaTemps(int m) {
+  if (V[21] <= 0) return false;
+  for (int x = 1; x < NumeroEscenes * 2; x++) {
+    if (V[x + 21] <= V[x + 20]) return false;
+  }
+  return true;
+}
+
+void NouCicle() {
+  text1 = " ";
+  for (int i = 0; i < NumeroEscenes * 2; i++) {
+    if (!verificarSequenciaTemps(i)) {
+      text1 = "Error seqüencia";
+      Serial.println("Error sequencia temporal");
+      return;
+    }
+  }
+
+  EstatAntic = EstatActual;
+  EstatActual = 0;
+
+  for (int i = 0; i < numeroCanals; i++) {
+    actualizarCanalFix(i, EstatActual);
+  }
+
+  referenciaTempsCicle = referenciaTempsEstat = referenciaTempsTransicio = micros();
+  tempsActualCicle = tempsActualEstat = tempsActualTransicio = 0;
+  contadorPuntTransicio = 0;
+
+  V[10] = EstatActual + 1;
+}
+
+void PararReproduccio() {
+  text1 = "  ";
+  EstatPlay = "Stop";
+  V[12] = 0;
+  V[13] = 0;
+  V[14] = 0;
+  V[10] = 0;
+  cicloEnCurso = false;
+
+  EstatActual = 0;
+  EstatAntic = 0;
+  contadorPuntTransicio = 0;
+
+  for (int i = 0; i < numeroCanals; i++) {
+    actualizarCanalFix(i, EstatActual);
+  }
+
+  tempsActualEstat = tempsActualCicle = tempsActualTransicio = 0;
+  referenciaTempsEstat = referenciaTempsCicle = referenciaTempsTransicio = micros();
+}
+
+// Calcula el progrés (t_pct, 0-1000) del punt de transició actual i actualitza
+// tots els canals actius amb interpolar().
+void cridaTransicio() {
+  const uint16_t t_pct = (uint16_t)(((uint32_t)contadorPuntTransicio * 1000UL) / numeroPuntsTransicio);
+  for (int i = 0; i < numeroCanals; i++) {
+    actualizarCanalTransicio(i, EstatActual, t_pct);
+  }
+}
+
+void CanviEstat() {
+  if (EstatActual == num_periodes - 1) {
+    if (EstatSelector == 1 || EstatSelector == 7) {
+      NouCicle();
+    }
+    return;
+  }
+
+  EstatAntic = EstatActual;
+  EstatActual++;
+
+  referenciaTempsEstat = referenciaTempsTransicio = micros();
+  tempsActualEstat = tempsActualTransicio = 0;
+  contadorPuntTransicio = 0;
+
+  V[10] = EstatActual + 1;
+
+  if (EstatActual % 2 == 0) {
+    for (int i = 0; i < numeroCanals; i++) {
+      actualizarCanalFix(i, EstatActual);
+    }
+  } else {
+    numeroPuntsTransicio = Temps[EstatActual] / tempsCiclesTransicio;
+  }
+}
+
+void AvancarCicleSiCal() {
+  tempsActualEstat = micros() - referenciaTempsEstat;
+  tempsActualCicle = micros() - referenciaTempsCicle;
+  tempsActualTransicio = micros() - referenciaTempsTransicio;
+  V[14] = tempsActualCicle / 1000000;
+
+  for (int i = 0; i < 8; i++) {
+    if (tempsActualEstat >= Temps[i] && EstatActual == i) {
+      CanviEstat();
+    }
+  }
+
+  if (EstatActual % 2 == 1 && tempsActualTransicio >= tempsCiclesTransicio && NumeroEscenes != 1) {
+    tempsActualTransicio = 0;
+    referenciaTempsTransicio = micros();
+    contadorPuntTransicio++;
+    if (contadorPuntTransicio <= numeroPuntsTransicio) {
+      cridaTransicio();
+    }
+  }
+}
+
+void PausarReproduccio() {
+  text1 = ">> Pausa <<";
+  EstatPlay = "Pausa";
+  pausaCicleInici = micros();
+}
+
+void ContinuarReproduccio() {
+  text1 = ">> reproduint <<";
+  EstatPlay = "Play";
+
+  const uint32_t pausaDuracio = micros() - pausaCicleInici;
+  referenciaTempsEstat += pausaDuracio;
+  referenciaTempsCicle += pausaDuracio;
+  referenciaTempsTransicio += pausaDuracio;
+}
+
+void IniciarReproduccio() {
+  if (V[12] == 0) return;
+  text1 = ">> reproduint <<";
+  EstatPlay = "Play";
+  V[13] = 0;
+  cicloEnCurso = true;
+  NouCicle();
+}
+
+void Reproduint() {
+  text1 = "... reproduint ...";
+}
+
+void GestioCicles() {
+  if (V[12] == 1 && EstatPlay == "Stop") IniciarReproduccio();
+  if (V[12] == 0 && (EstatPlay == "Play" || EstatPlay == "Pausa")) PararReproduccio();
+  if (V[13] == 1 && EstatPlay == "Play") PausarReproduccio();
+  if (V[12] == 1 && V[13] == 0 && EstatPlay == "Pausa") ContinuarReproduccio();
+  if (V[12] == 1 && EstatPlay == "Play") Reproduint();
+}
+
+// Reacciona a l'edició dels punts de temps acumulats (V21-28) des de la
+// pantalla de Programació de Cicle, desplaçant els punts posteriors per
+// conservar-ne la durada relativa (igual que l'EVO).
+void GravacioIntervals() {
+  for (int i = 0; i < NumeroEscenes * 2; i++) {
+    if (V[i + 21] != TempsAcumulat[i]) {
+      const long diferencia = (long)V[i + 21] - (long)TempsAcumulat[i];
+      for (int j = i + 1; j < NumeroEscenes * 2; j++) V[j + 21] += diferencia;
+
+      if (verificarSequenciaTemps(i)) {
+        for (int j = 0; j < NumeroEscenes * 2; j++) {
+          TempsAcumulat[j] = V[j + 21];
+          if (j == 0) {
+            Temps[j] = (uint32_t)TempsAcumulat[j] * 1000000UL;
+          } else {
+            Temps[j] = (uint32_t)(TempsAcumulat[j] - TempsAcumulat[j - 1]) * 1000000UL;
+          }
+        }
+
+        text1 = " ";
+        tiempoTotalCiclo = 0;
+        for (int k = 0; k < NumeroEscenes * 2; k++) tiempoTotalCiclo += Temps[k];
+        V[15] = tiempoTotalCiclo / 1000000;
+
+        markParamEscenesDirty();
+      } else {
+        V[i + 21] = TempsAcumulat[i];
+        text1 = "Error seqüencia";
+      }
+    }
+  }
+}
+
+void Cicle() {
+  GravacioIntervals();
+  GestioCicles();
+}
+
+void actualitzarEstatEscenes() {
+  V[18] = NumeroEscenes = ParamEscenes.NumeroEscenes;
+  num_periodes = NumeroEscenes * 2;
+  EscenaActiva = ParamEscenes.EscenaActiva;
+}
+
+void inicializarCanals() {
+  apagarTotsElsCanals();
+  for (int i = 0; i < numeroCanals; i++) {
+    actualizarCanalFix(i, 0);
+  }
+}
+
+void aplicarSelector(int estat) {
+  for (int i = 0; i < numeroCanals; i++) {
+    actualizarCanalFix(i, estat);
+  }
+}
+
+// Refresca V01-03 amb el valor de l'escena activa pels 3 canals actualment
+// seleccionats (selectedChannel[], el mateix mecanisme de v1 — no Canal_1-3
+// com a l'EVO) i n'aplica el valor immediatament a la sortida DMX.
+void RecuperarValorsCanals() {
+  V[1] = canalsData[selectedChannel[0] - 1].valors[EscenaActiva - 1];
+  V[2] = canalsData[selectedChannel[1] - 1].valors[EscenaActiva - 1];
+  V[3] = canalsData[selectedChannel[2] - 1].valors[EscenaActiva - 1];
+
+  enviarCanalEscena(selectedChannel[0] - 1, EscenaActiva - 1);
+  enviarCanalEscena(selectedChannel[1] - 1, EscenaActiva - 1);
+  enviarCanalEscena(selectedChannel[2] - 1, EscenaActiva - 1);
+}
+
+void InicialitzarPrograma() {
+  V[18] = NumeroEscenes = ParamEscenes.NumeroEscenes;
+  actualitzarEstatEscenes();
+
+  for (int i = 0; i < 8; i++) Temps[i] = ParamEscenes.tempsPeriodes[i];
+
+  tiempoTotalCiclo = 0;
+  for (int i = 0; i < NumeroEscenes * 2; i++) tiempoTotalCiclo += Temps[i];
+  V[15] = tiempoTotalCiclo / 1000000;
+
+  V[21] = TempsAcumulat[0] = Temps[0] / 1000000;
+  for (int i = 1; i < 8; i++) {
+    V[i + 21] = TempsAcumulat[i] = TempsAcumulat[i - 1] + Temps[i] / 1000000;
+  }
+
+  inicializarCanals();
+
+  V[9] = EscenaActiva = 1;
+  selectGroup(1);
+
+  RecuperarValorsCanals();
+
+  V[12] = 0;
+  V[13] = 0;
+}
+
+// Reacciona als canvis de V35 (canvi d'escena) i V01-03 (edició en directe
+// del valor d'un canal a l'escena activa) — cridada des de loop() només
+// mentre la pantalla d'Escenes/Canals és l'activa (V50), igual que l'EVO.
+void Escenes() {
+  if (V[35] != 0) {
+    V[9] = EscenaActiva + V[35];
+    if (V[9] < 1) V[9] = 1;
+    if (V[9] > 4) V[9] = 4;
+
+    EscenaActiva = V[9];
+    ParamEscenes.EscenaActiva = EscenaActiva;
+    markParamEscenesDirty();
+
+    RecuperarValorsCanals();
+
+    const int estatCorrespondent = (EscenaActiva - 1) * 2;
+    aplicarSelector(estatCorrespondent);
+
+    V[35] = 0;
+    return;
+  }
+
+  if (V[1] != canalsData[selectedChannel[0] - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(selectedChannel[0] - 1, EscenaActiva - 1, (int)V[1]);
+    return;
+  }
+  if (V[2] != canalsData[selectedChannel[1] - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(selectedChannel[1] - 1, EscenaActiva - 1, (int)V[2]);
+    return;
+  }
+  if (V[3] != canalsData[selectedChannel[2] - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(selectedChannel[2] - 1, EscenaActiva - 1, (int)V[3]);
+    return;
+  }
+}
+
+// Reacciona a un canvi del nombre d'escenes actives (V18) des de la pantalla
+// de Paràmetres — cridada des de loop() només mentre aquesta pantalla és
+// l'activa. El reset de fàbrica (V41/V42) es queda amb el mecanisme propi de
+// v1 (resetArmed), no passa per aquí.
+void ConfiguracioParametres() {
+  if (V[18] != NumeroEscenes) {
+    ParamEscenes.EscenaActiva = 1;
+    for (int i = 0; i < 8; i++) ParamEscenes.tempsPeriodes[i] = 5000000UL;
+    NumeroEscenes = ParamEscenes.NumeroEscenes = (int)V[18];
+
+    actualitzarEstatEscenes();
+    markParamEscenesDirty();
+    InicialitzarPrograma();
+  }
+}
+
+// Es crida en rebre V42=1 amb el reset ja armat (V41=1). Torna les escenes,
+// transicions, canals gestionables, noms de canal, nom del pessebre i
+// descripció al seu valor de fàbrica, i ho desa immediatament (no cal
+// esperar el debounce). El nom Bluetooth es manté intacte.
+void performFactoryReset() {
+  memset(canalsData, 0, sizeof(canalsData));
+  for (int i = 0; i < MAX_DMX_CHANNEL; i++) valorActual[i] = 0;
+  saveCanals();
+
+  ParamEscenes.EscenaActiva = 1;
+  ParamEscenes.NumeroEscenes = 4;
+  for (int i = 0; i < 8; i++) ParamEscenes.tempsPeriodes[i] = 5000000UL;
+  for (int i = 0; i < 4; i++) ParamEscenes.transicions[i] = {LINEAL, 0};
+  saveParamEscenes();
+
+  // numeroCanals es queda amb el mecanisme de desat de v1 (sceneSave() també
+  // escriu el blob "scene", ara sense ús real en v2 — es manté per no haver
+  // de separar numeroCanals en una clau NVS pròpia).
+  numeroCanals = roundDownToMultipleOf3(MAX_DMX_CHANNEL);
+  selectGroup(1);
+  sceneSave();
+
+  memset(channelNames, 0, sizeof(channelNames));
   pessebeName = "";
   descripcio = "";
-  saveNames();                                        // desa immediatament (també neteja namesDirty)
+  saveNames();
 
-  Serial.println("Reset de fàbrica: escena, canals, noms, pessebre i descripció reinicialitzats");
+  InicialitzarPrograma();
+
+  Serial.println("Reset de fàbrica: escenes, transicions, canals, noms, pessebre i descripció reinicialitzats");
 }
 
 // ---------------------------------------------------------------------------
