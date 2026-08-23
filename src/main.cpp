@@ -1338,7 +1338,11 @@ void handleChannelBulk4Scene(const String &rawInput) {
 //   V72=t1|s1|t2|s2|t3|s3|t4|s4  -> assigna (t=TipusTransicio 0-3, s=%salt 0-100)
 // Resposta (en tots dos casos): "t1|s1|t2|s2|t3|s3|t4|s4"
 void handleTransitionsBulk(const String &rawInput) {
-  if (rawInput != "?" && rawInput.length() > 0) {
+  // Assignació nomes si porta el separador '|' (8 camps) -- NO es fa servir
+  // "?" com a senyal de consulta perque processFrame() ja intercepta
+  // qualsevol trama amb rhs=="?" com a lectura generica (handleRequest())
+  // abans que arribi aqui; la consulta real la fa l'app enviant "Q".
+  if (rawInput.indexOf('|') != -1) {
     String rest = rawInput;
     long fields[8];
     for (int i = 0; i < 8; i++) {
