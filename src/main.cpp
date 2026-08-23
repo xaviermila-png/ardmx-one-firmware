@@ -1668,7 +1668,11 @@ void setup() {
   Serial.begin(115200);            // engega el port sèrie de debug (per USB)
   pinMode(STATUS_LED_PIN, OUTPUT);  // configura el pin del LED com a sortida
 
-  sceneLoad();                      // recupera l'última escena desada (o zeros)
+  memset(V, 0, sizeof(V));
+
+  sceneLoad();                      // recupera l'última escena desada (o zeros) — numeroCanals
+  loadCanals();                     // recupera els valors de canal de les 4 escenes
+  loadParamEscenes();               // recupera escena activa/selector/durades/transicions
   loadBtName();                     // recupera el nom Bluetooth (o el de per defecte)
   loadPin();                        // recupera el PIN de connexió (o cap, per defecte)
   loadNames();                      // recupera els noms de canal, pessebe i descripció
@@ -1676,6 +1680,34 @@ void setup() {
 
   bleRxQueue = xQueueCreate(8, sizeof(BleRxChunk));
   bleInit();  // engega el BLE amb el nom actual
+
+  InicialitzarPrograma();
+
+  V[11] = ParamEscenes.EstatSelector;
+  EstatSelector = ParamEscenes.EstatSelector;
+
+  switch (EstatSelector) {
+    case 1:
+      NouCicle();
+      break;
+    case 3:
+      aplicarSelector(1);
+      break;
+    case 4:
+      aplicarSelector(2);
+      break;
+    case 5:
+      aplicarSelector(4);
+      break;
+    case 6:
+      aplicarSelector(6);
+      break;
+    case 7:
+      RecuperarValorsCanals();
+      break;
+    default:
+      break;
+  }
 
   Serial.println("ARDMX One iniciat");  // confirma per Serial que l'arrencada ha anat bé
 }
@@ -1685,7 +1717,61 @@ void loop() {
   drainBleRxQueue();  // processa qualsevol trama BLE rebuda des de l'última volta
   updateStatusLed();   // actualitza l'estat del LED
 
-  // Si hi ha canvis pendents (sceneDirty) i ja ha passat prou temps sense nous canvis, desa a NVS
+  // Detecta un canvi del selector principal (V11) — mateix disseny que
+  // ardmx4-evo-firmware, sense el case 2 (Trigger, requereix un pin físic
+  // que aquesta placa no té).
+  if (V[11] != EstatSelector) {
+    ParamEscenes.EstatSelector = EstatSelector = (int)V[11];
+    V[10] = 0;
+
+    PararReproduccio();
+    markParamEscenesDirty();
+
+    switch (EstatSelector) {
+      case 1:
+        NouCicle();
+        break;
+      case 3:
+        aplicarSelector(1);
+        break;
+      case 4:
+        aplicarSelector(2);
+        break;
+      case 5:
+        aplicarSelector(4);
+        break;
+      case 6:
+        aplicarSelector(6);
+        break;
+      case 7:
+        RecuperarValorsCanals();
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (EstatSelector == 1 && NumeroEscenes == 1) {
+    V[11] = 3;
+  }
+
+  if (EstatSelector == 1 && NumeroEscenes != 1) {
+    AvancarCicleSiCal();
+  }
+
+  // EstatSelector == 7: pantalles de configuració/escenes/cicle de l'app
+  if (EstatSelector == 7) {
+    if (V[50] == 3 && (EstatPlay == "Play" || EstatPlay == "Pausa")) PararReproduccio();
+    if (V[50] == 4) ConfiguracioParametres();
+    if (V[50] == 1) Cicle();
+    if (V[50] == 5) Escenes();
+
+    if (cicloEnCurso && EstatPlay == "Play") {
+      AvancarCicleSiCal();
+    }
+  }
+
+  // Si hi ha canvis pendents i ja ha passat prou temps sense nous canvis, desa a NVS
   if (sceneDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     sceneSave();
     Serial.println("Escena desada a NVS");
@@ -1693,6 +1779,12 @@ void loop() {
   if (namesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     saveNames();
     Serial.println("Noms/pessebe/descripció desats a NVS");
+  }
+  if (canalsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+    saveCanals();
+  }
+  if (paramEscenesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+    saveParamEscenes();
   }
 
   // Envia com a màxim cada DMX_SEND_INTERVAL_MS (vegeu el comentari a la
