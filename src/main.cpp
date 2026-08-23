@@ -461,6 +461,115 @@ void markDirty() {
   lastChangeMillis = millis();  // guarda "ara" com a últim instant de canvi
 }
 
+// Marca que hi ha canvis pendents als valors de canal de les 4 escenes
+// (canalsData) — mateix debounce compartit que la resta (lastChangeMillis).
+void markCanalsDirty() {
+  canalsDirty = true;
+  lastChangeMillis = millis();
+}
+
+// Marca que hi ha canvis pendents als paràmetres d'escenes/cicle/transicions.
+void markParamEscenesDirty() {
+  paramEscenesDirty = true;
+  lastChangeMillis = millis();
+}
+
+// Es crida un cop, a l'arrencada: recupera els valors de canal de les 4
+// escenes (o els deixa a 0 si mai s'han desat). Mateix patró de trossos que
+// loadNames()/saveNames() — un blob de canalsData sencer (512 canals x 4
+// bytes = 2 KB) ja hi cabria en teoria en una sola entrada NVS, però es
+// parteix igualment pel mateix límit pràctic de nvs_set_blob documentat a
+// CHANNEL_NAME_CHUNK_SIZE, i per mantenir el mateix patró arreu del fitxer.
+void loadCanals() {
+  prefs.begin("ardmxone", false);
+
+  const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
+  bool allChunksOk = true;
+  for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
+    const String key = "chv" + String(chunk);
+    CanalData *dest = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
+    if (!prefs.isKey(key.c_str())) {
+      allChunksOk = false;
+      break;
+    }
+    const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
+    if (bytesRead != chunkBytes) {
+      allChunksOk = false;
+      break;
+    }
+  }
+  if (!allChunksOk) {
+    memset(canalsData, 0, sizeof(canalsData));
+  }
+
+  prefs.end();
+}
+
+// Es crida quan cal desar els valors de canal de les 4 escenes (des del
+// debounce del loop()).
+void saveCanals() {
+  prefs.begin("ardmxone", false);
+
+  const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
+  for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
+    const String key = "chv" + String(chunk);
+    const CanalData *src = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
+    if (prefs.putBytes(key.c_str(), src, chunkBytes) != chunkBytes) {
+      Serial.printf("ERROR desant valors de canal (tros %d)\n", chunk);
+    }
+  }
+
+  prefs.end();
+  canalsDirty = false;
+}
+
+// Es crida un cop, a l'arrencada: recupera l'escena activa, el nombre
+// d'escenes, el selector principal, les durades dels 8 períodes i les 4
+// transicions — o valors de fàbrica si mai s'han desat.
+void loadParamEscenes() {
+  prefs.begin("ardmxone", false);
+
+  bool ok = prefs.isKey("paramesc");
+  if (ok) {
+    const size_t bytesRead = prefs.getBytes("paramesc", &ParamEscenes, sizeof(ParamEscenes));
+    ok = (bytesRead == sizeof(ParamEscenes));
+  }
+
+  if (!ok) {
+    ParamEscenes.EscenaActiva = 1;
+    ParamEscenes.NumeroEscenes = 4;
+    ParamEscenes.EstatSelector = 0;
+    for (int i = 0; i < 8; i++) ParamEscenes.tempsPeriodes[i] = 5000000UL;  // 5s per defecte
+    for (int i = 0; i < 4; i++) ParamEscenes.transicions[i] = {LINEAL, 0};
+  }
+
+  EscenaActiva = ParamEscenes.EscenaActiva;
+  NumeroEscenes = ParamEscenes.NumeroEscenes;
+  EstatSelector = ParamEscenes.EstatSelector;
+  num_periodes = NumeroEscenes * 2;
+  for (int i = 0; i < 8; i++) Temps[i] = ParamEscenes.tempsPeriodes[i];
+  for (int i = 0; i < 4; i++) transicions[i] = ParamEscenes.transicions[i];
+
+  prefs.end();
+}
+
+// Es crida quan cal desar l'escena activa/nombre d'escenes/selector/durades/
+// transicions (des del debounce del loop()).
+void saveParamEscenes() {
+  ParamEscenes.EscenaActiva = EscenaActiva;
+  ParamEscenes.NumeroEscenes = NumeroEscenes;
+  ParamEscenes.EstatSelector = EstatSelector;
+  for (int i = 0; i < 8; i++) ParamEscenes.tempsPeriodes[i] = Temps[i];
+  for (int i = 0; i < 4; i++) ParamEscenes.transicions[i] = transicions[i];
+
+  prefs.begin("ardmxone", false);
+  if (prefs.putBytes("paramesc", &ParamEscenes, sizeof(ParamEscenes)) != sizeof(ParamEscenes)) {
+    Serial.println("ERROR desant els parametres d'escenes");
+  }
+  prefs.end();
+  paramEscenesDirty = false;
+}
+
 // Igual que markDirty() però pels noms/pessebe/descripció — comparteix el
 // mateix debounce que l'escena (vegeu SAVE_DEBOUNCE_MS), important sobretot
 // durant una importació massiva (V70) que pot tocar centenars de canals
