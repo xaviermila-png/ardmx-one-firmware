@@ -449,10 +449,23 @@ void dmxInit() {
 // Envia UNA trama DMX (numeroCanals canals de dmxData, no sempre els 512
 // sencers — vegeu numeroCanals) i espera que acabi de sortir.
 void dmxSendFrame() {
+  // Omple dmxData des de valorActual[] (calculat per actualizarCanalFix()/
+  // actualizarCanalTransicio() — vegeu "Cicle / Escenes") en lloc de llegir-lo
+  // ja fet: en v2 valorActual és l'única font de veritat de la sortida DMX.
+  for (int i = 0; i < numeroCanals; i++) {
+    dmxData[i + 1] = (uint8_t)constrain((int)valorActual[i], 0, 255);
+  }
   const int packetSize = numeroCanals + 1;  // +1 pel start code (índex 0)
   dmx_write(DMX_PORT, dmxData, packetSize);  // copia dmxData al buffer intern del driver
   dmx_send_num(DMX_PORT, packetSize);        // comença a transmetre'l pel cable
-  dmx_wait_sent(DMX_PORT, DMX_TIMEOUT_TICK);  // bloqueja fins que la trama ha sortit del tot
+  // Sense dmx_wait_sent() a propòsit: dmx_send_num() ja espera internament
+  // (fins a ~23ms) que la trama ANTERIOR hagi acabat de sortir abans de
+  // començar-ne una de nova — la transmissió mai se solapa igualment. Un
+  // wait explícit addicional aquí bloquejaria fins que la trama ACTUAL
+  // acabés de sortir, i amb les transicions avançant cada 10ms
+  // (tempsCiclesTransicio) això feia perdre tics i el cicle es notava a
+  // batzegades per sobre d'uns 100 canals actius — confirmat en maquinari
+  // real a ardmx4-evo-firmware després de treure aquesta mateixa espera.
 }
 
 // ---------------------------------------------------------------------------
