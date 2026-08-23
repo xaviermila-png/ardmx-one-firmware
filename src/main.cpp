@@ -344,13 +344,17 @@ uint8_t interpolar(uint8_t v0, uint8_t v1, uint16_t t_pct, TipusTransicio tipus,
 }
 
 // Valor (0-255) de cada canal a cadascuna de les 4 escenes.
+// Cada canal DMX té les seves 4 escenes (valors) I les seves 4 transicions
+// (tipus+%salt) PRÒPIES — no compartides amb la resta de canals: un canal
+// pot fer un SALT sobtat mentre un altre fa un LINEAL suau durant la
+// mateixa transició d'escena.
 struct CanalData {
   uint8_t valors[4];
+  Transicio transicions[4];  // transicions[i]: escena i+1 -> escena ((i+1)%4)+1
 };
 
-CanalData canalsData[MAX_DMX_CHANNEL];       // per canal DMX (0-based), 4 valors (una per escena)
+CanalData canalsData[MAX_DMX_CHANNEL];       // per canal DMX (0-based)
 float valorActual[MAX_DMX_CHANNEL];          // valor interpolat que s'envia ara mateix per DMX
-Transicio transicions[4];                    // transicions[i]: escena i+1 -> escena ((i+1)%4)+1
 
 constexpr int CHANNEL_CHUNK_SIZE = 32;  // canals per tros de NVS, mateix patró que channelNames
 constexpr int CHANNEL_CHUNK_COUNT = MAX_DMX_CHANNEL / CHANNEL_CHUNK_SIZE;  // 16 trossos
@@ -365,7 +369,6 @@ struct ParametresEscenes {
   int NumeroEscenes;
   int EstatSelector;
   uint32_t tempsPeriodes[8];  // microsegons
-  Transicio transicions[4];
 };
 ParametresEscenes ParamEscenes;
 bool paramEscenesDirty = false;
@@ -413,13 +416,14 @@ void actualizarCanalFix(int i, int estat) {
 }
 
 // Un pas d'interpolació entre l'escena origen i la següent, segons el tipus
-// de transició GLOBAL que toqui (transicions[escenaIndex]) — a diferència de
-// ardmx4-evo-firmware v1, aquí no hi ha mode per canal.
+// de transició PRÒPIA d'aquest canal (canalsData[i].transicions[escenaIndex])
+// — cada canal pot tenir un tipus/percentatge diferent per a la mateixa
+// transició d'escena.
 void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
   const int escenaIndex = estatActual / 2;  // mateixa divisió que actualizarCanalFix
   const uint8_t v0 = canalsData[i].valors[escenaIndex];
   const uint8_t v1 = canalsData[i].valors[(escenaIndex + 1) % 4];
-  const Transicio &tr = transicions[escenaIndex];
+  const Transicio &tr = canalsData[i].transicions[escenaIndex];
   valorActual[i] = interpolar(v0, v1, t_pct, tr.tipus, tr.saltPercent);
 }
 
@@ -591,8 +595,9 @@ void saveCanals() {
 }
 
 // Es crida un cop, a l'arrencada: recupera l'escena activa, el nombre
-// d'escenes, el selector principal, les durades dels 8 períodes i les 4
-// transicions — o valors de fàbrica si mai s'han desat.
+// d'escenes, el selector principal i les durades dels 8 períodes — o valors
+// de fàbrica si mai s'han desat. Les transicions ja NO viuen aquí (són
+// pròpies de cada canal, vegeu loadCanals()/CanalData).
 void loadParamEscenes() {
   prefs.begin("ardmxone", false);
 
@@ -607,7 +612,6 @@ void loadParamEscenes() {
     ParamEscenes.NumeroEscenes = 4;
     ParamEscenes.EstatSelector = 0;
     for (int i = 0; i < 8; i++) ParamEscenes.tempsPeriodes[i] = 5000000UL;  // 5s per defecte
-    for (int i = 0; i < 4; i++) ParamEscenes.transicions[i] = {LINEAL, 0};
   }
 
   EscenaActiva = ParamEscenes.EscenaActiva;
@@ -615,19 +619,17 @@ void loadParamEscenes() {
   EstatSelector = ParamEscenes.EstatSelector;
   num_periodes = NumeroEscenes * 2;
   for (int i = 0; i < 8; i++) Temps[i] = ParamEscenes.tempsPeriodes[i];
-  for (int i = 0; i < 4; i++) transicions[i] = ParamEscenes.transicions[i];
 
   prefs.end();
 }
 
-// Es crida quan cal desar l'escena activa/nombre d'escenes/selector/durades/
-// transicions (des del debounce del loop()).
+// Es crida quan cal desar l'escena activa/nombre d'escenes/selector/durades
+// (des del debounce del loop()).
 void saveParamEscenes() {
   ParamEscenes.EscenaActiva = EscenaActiva;
   ParamEscenes.NumeroEscenes = NumeroEscenes;
   ParamEscenes.EstatSelector = EstatSelector;
   for (int i = 0; i < 8; i++) ParamEscenes.tempsPeriodes[i] = Temps[i];
-  for (int i = 0; i < 4; i++) ParamEscenes.transicions[i] = transicions[i];
 
   prefs.begin("ardmxone", false);
   if (prefs.putBytes("paramesc", &ParamEscenes, sizeof(ParamEscenes)) != sizeof(ParamEscenes)) {
@@ -1116,6 +1118,8 @@ void ConfiguracioParametres() {
 // descripció al seu valor de fàbrica, i ho desa immediatament (no cal
 // esperar el debounce). El nom Bluetooth es manté intacte.
 void performFactoryReset() {
+  // memset ja deixa cada canal a valors=0 i transicions=LINEAL/0% (el
+  // primer TipusTransicio de l'enum és LINEAL=0), no cal cap bucle a part.
   memset(canalsData, 0, sizeof(canalsData));
   for (int i = 0; i < MAX_DMX_CHANNEL; i++) valorActual[i] = 0;
   saveCanals();
@@ -1123,7 +1127,6 @@ void performFactoryReset() {
   ParamEscenes.EscenaActiva = 1;
   ParamEscenes.NumeroEscenes = 4;
   for (int i = 0; i < 8; i++) ParamEscenes.tempsPeriodes[i] = 5000000UL;
-  for (int i = 0; i < 4; i++) ParamEscenes.transicions[i] = {LINEAL, 0};
   saveParamEscenes();
 
   // numeroCanals es queda amb el mecanisme de desat de v1 (sceneSave() també
@@ -1280,14 +1283,15 @@ void handleDescriptionChange(const String &rawInput) {
   replyText(69, descripcio.c_str());
 }
 
-// V71: consulta o assignació de les 4 escenes d'UN canal explícit — mateix
-// disseny que ardmx4-evo-firmware, sense els camps de mode (aquí les
-// transicions són globals, no per canal). Substitueix l'antic V70 (que
-// tocava dmxData directament, un concepte que ja no existeix en v2: la
-// sortida DMX surt de valorActual[], recalculat cada trama des de
-// canalsData/transicions, no d'un buffer editat a mà).
-//   V71=N                    -> consulta, respon "v1|v2|v3|v4|nom"
-//   V71=N|v1|v2|v3|v4|nom    -> assigna els 4 valors i el nom
+// V71: consulta o assignació de les 4 escenes I les 4 transicions PRÒPIES
+// d'UN canal explícit. Substitueix l'antic V70 (que tocava dmxData
+// directament, un concepte que ja no existeix en v2: la sortida DMX surt de
+// valorActual[], recalculat cada trama des de canalsData, no d'un buffer
+// editat a mà). V72 (transicions globals) ha desaparegut — cada canal porta
+// ara les seves pròpies, incloses aquí.
+//   V71=N                                          -> consulta
+//   V71=N|v1|v2|v3|v4|t1|s1|t2|s2|t3|s3|t4|s4|nom  -> assigna
+// Resposta (en tots dos casos): "v1|v2|v3|v4|t1|s1|t2|s2|t3|s3|t4|s4|nom"
 void handleChannelBulk4Scene(const String &rawInput) {
   const int firstPipe = rawInput.indexOf('|');
   const int channel = constrain(
@@ -1295,8 +1299,8 @@ void handleChannelBulk4Scene(const String &rawInput) {
 
   if (firstPipe != -1) {
     String rest = rawInput.substring(firstPipe + 1);
-    long fields[4];
-    for (int i = 0; i < 4; i++) {
+    long fields[12];
+    for (int i = 0; i < 12; i++) {
       const int p = rest.indexOf('|');
       if (p == -1) {
         fields[i] = rest.toInt();
@@ -1308,11 +1312,16 @@ void handleChannelBulk4Scene(const String &rawInput) {
     }
     const String nom = sanitizeText(rest, MAX_CHANNEL_NAME_LENGTH);
 
+    CanalData &c = canalsData[channel - 1];
     for (int i = 0; i < 4; i++) {
-      canalsData[channel - 1].valors[i] = (uint8_t)constrain(fields[i], 0, 255);
+      c.valors[i] = (uint8_t)constrain(fields[i], 0, 255);
+    }
+    for (int i = 0; i < 4; i++) {
+      c.transicions[i].tipus = (TipusTransicio)constrain(fields[4 + i * 2], 0, 3);
+      c.transicions[i].saltPercent = (uint8_t)constrain(fields[4 + i * 2 + 1], 0, 100);
     }
     if (EscenaActiva >= 1 && EscenaActiva <= 4) {
-      valorActual[channel - 1] = canalsData[channel - 1].valors[EscenaActiva - 1];
+      valorActual[channel - 1] = c.valors[EscenaActiva - 1];
     }
     nom.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
 
@@ -1327,48 +1336,13 @@ void handleChannelBulk4Scene(const String &rawInput) {
   }
 
   const CanalData &c = canalsData[channel - 1];
-  const String reply = String(c.valors[0]) + "|" + String(c.valors[1]) + "|" +
-                        String(c.valors[2]) + "|" + String(c.valors[3]) + "|" +
-                        String(channelNames[channel - 1]);
-  replyText(71, reply.c_str());
-}
-
-// V72: consulta o assignació de les 4 transicions globals (tipus + %salt).
-//   V72=?                        -> consulta
-//   V72=t1|s1|t2|s2|t3|s3|t4|s4  -> assigna (t=TipusTransicio 0-3, s=%salt 0-100)
-// Resposta (en tots dos casos): "t1|s1|t2|s2|t3|s3|t4|s4"
-void handleTransitionsBulk(const String &rawInput) {
-  // Assignació nomes si porta el separador '|' (8 camps) -- NO es fa servir
-  // "?" com a senyal de consulta perque processFrame() ja intercepta
-  // qualsevol trama amb rhs=="?" com a lectura generica (handleRequest())
-  // abans que arribi aqui; la consulta real la fa l'app enviant "Q".
-  if (rawInput.indexOf('|') != -1) {
-    String rest = rawInput;
-    long fields[8];
-    for (int i = 0; i < 8; i++) {
-      const int p = rest.indexOf('|');
-      if (p == -1) {
-        fields[i] = rest.toInt();
-        rest = "";
-      } else {
-        fields[i] = rest.substring(0, p).toInt();
-        rest = rest.substring(p + 1);
-      }
-    }
-    for (int i = 0; i < 4; i++) {
-      transicions[i].tipus = (TipusTransicio)constrain(fields[i * 2], 0, 3);
-      transicions[i].saltPercent = (uint8_t)constrain(fields[i * 2 + 1], 0, 100);
-      ParamEscenes.transicions[i] = transicions[i];
-    }
-    markParamEscenesDirty();
-  }
-
-  String reply = "";
+  String reply = String(c.valors[0]) + "|" + String(c.valors[1]) + "|" +
+                 String(c.valors[2]) + "|" + String(c.valors[3]);
   for (int i = 0; i < 4; i++) {
-    reply += String((int)transicions[i].tipus) + "|" + String(transicions[i].saltPercent);
-    if (i < 3) reply += "|";
+    reply += "|" + String((int)c.transicions[i].tipus) + "|" + String(c.transicions[i].saltPercent);
   }
-  replyText(72, reply.c_str());
+  reply += "|" + String(channelNames[channel - 1]);
+  replyText(71, reply.c_str());
 }
 
 // S'executa quan arriba una escriptura "!Vxx=valor$" (valor diferent de "?").
@@ -1525,9 +1499,7 @@ void processFrame(const String &body) {
   } else if (index == 69) {
     handleDescriptionChange(rhs);  // descripció
   } else if (index == 71) {
-    handleChannelBulk4Scene(rhs);  // consulta/assignació de les 4 escenes d'un canal (export/import)
-  } else if (index == 72) {
-    handleTransitionsBulk(rhs);  // consulta/assignació de les 4 transicions globals
+    handleChannelBulk4Scene(rhs);  // consulta/assignació de les 4 escenes+transicions d'un canal
   } else if (index == 73) {
     handlePinVerify(rhs);
   } else if (index == 74) {
