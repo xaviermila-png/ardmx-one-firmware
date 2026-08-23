@@ -1263,58 +1263,96 @@ void handleDescriptionChange(const String &rawInput) {
   replyText(69, descripcio.c_str());
 }
 
-// Es crida en rebre V70=<...> — consulta o assignació directa d'UN canal
-// explícit (vegeu el bloc de capçalera del fitxer). No toca la selecció
-// dels sliders (selectedChannel): a diferència de V01-03/V04-06/V65-67,
-// aquest índex s'adreça sempre pel número de canal real, pensat perquè
-// l'app pugui exportar/importar tots els canals actius sense passar pels 3
-// slots visibles.
-void handleChannelBulk(const String &rawInput) {
-  const int pipe1 = rawInput.indexOf('|');
-  int channel;
+// V71: consulta o assignació de les 4 escenes d'UN canal explícit — mateix
+// disseny que ardmx4-evo-firmware, sense els camps de mode (aquí les
+// transicions són globals, no per canal). Substitueix l'antic V70 (que
+// tocava dmxData directament, un concepte que ja no existeix en v2: la
+// sortida DMX surt de valorActual[], recalculat cada trama des de
+// canalsData/transicions, no d'un buffer editat a mà).
+//   V71=N                    -> consulta, respon "v1|v2|v3|v4|nom"
+//   V71=N|v1|v2|v3|v4|nom    -> assigna els 4 valors i el nom
+void handleChannelBulk4Scene(const String &rawInput) {
+  const int firstPipe = rawInput.indexOf('|');
+  const int channel = constrain(
+      (firstPipe == -1 ? rawInput : rawInput.substring(0, firstPipe)).toInt(), 1, numeroCanals);
 
-  if (pipe1 == -1) {
-    // Només un número de canal: consulta (no modifica res).
-    channel = constrain(rawInput.toInt(), 1, MAX_DMX_CHANNEL);
-  } else {
-    // "N|valor|nom": assignació directa del valor DMX i del nom.
-    channel = constrain(rawInput.substring(0, pipe1).toInt(), 1, MAX_DMX_CHANNEL);
-    const int pipe2 = rawInput.indexOf('|', pipe1 + 1);
-    const String valuePart = pipe2 == -1 ? rawInput.substring(pipe1 + 1)
-                                          : rawInput.substring(pipe1 + 1, pipe2);
-    const String namePart = pipe2 == -1 ? "" : rawInput.substring(pipe2 + 1);
-
-    const uint8_t newValue = (uint8_t)constrain(valuePart.toInt(), 0, 255);
-    if (dmxData[channel] != newValue) {
-      dmxData[channel] = newValue;
-      markDirty();
+  if (firstPipe != -1) {
+    String rest = rawInput.substring(firstPipe + 1);
+    long fields[4];
+    for (int i = 0; i < 4; i++) {
+      const int p = rest.indexOf('|');
+      if (p == -1) {
+        fields[i] = rest.toInt();
+        rest = "";
+      } else {
+        fields[i] = rest.substring(0, p).toInt();
+        rest = rest.substring(p + 1);
+      }
     }
+    const String nom = sanitizeText(rest, MAX_CHANNEL_NAME_LENGTH);
 
-    const String cleanName = sanitizeText(namePart, MAX_CHANNEL_NAME_LENGTH);
-    cleanName.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
+    for (int i = 0; i < 4; i++) {
+      canalsData[channel - 1].valors[i] = (uint8_t)constrain(fields[i], 0, 255);
+    }
+    if (EscenaActiva >= 1 && EscenaActiva <= 4) {
+      valorActual[channel - 1] = canalsData[channel - 1].valors[EscenaActiva - 1];
+    }
+    nom.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
+
+    markCanalsDirty();
     markNamesDirty();
+
+    // Si el canal assignat és un dels 3 seleccionats, V[1-3] queda
+    // desactualitzat i Escenes() (que segueix corrent mentre aquesta
+    // pantalla és l'activa) confondria l'import amb un moviment d'slider i
+    // el sobreescriuria — mateix bug/solució que a l'EVO.
+    RecuperarValorsCanals();
   }
 
-  const String reply = String(dmxData[channel]) + "|" + String(channelNames[channel - 1]);
-  replyText(70, reply.c_str());
+  const CanalData &c = canalsData[channel - 1];
+  const String reply = String(c.valors[0]) + "|" + String(c.valors[1]) + "|" +
+                        String(c.valors[2]) + "|" + String(c.valors[3]) + "|" +
+                        String(channelNames[channel - 1]);
+  replyText(71, reply.c_str());
+}
+
+// V72: consulta o assignació de les 4 transicions globals (tipus + %salt).
+//   V72=?                        -> consulta
+//   V72=t1|s1|t2|s2|t3|s3|t4|s4  -> assigna (t=TipusTransicio 0-3, s=%salt 0-100)
+// Resposta (en tots dos casos): "t1|s1|t2|s2|t3|s3|t4|s4"
+void handleTransitionsBulk(const String &rawInput) {
+  if (rawInput != "?" && rawInput.length() > 0) {
+    String rest = rawInput;
+    long fields[8];
+    for (int i = 0; i < 8; i++) {
+      const int p = rest.indexOf('|');
+      if (p == -1) {
+        fields[i] = rest.toInt();
+        rest = "";
+      } else {
+        fields[i] = rest.substring(0, p).toInt();
+        rest = rest.substring(p + 1);
+      }
+    }
+    for (int i = 0; i < 4; i++) {
+      transicions[i].tipus = (TipusTransicio)constrain(fields[i * 2], 0, 3);
+      transicions[i].saltPercent = (uint8_t)constrain(fields[i * 2 + 1], 0, 100);
+      ParamEscenes.transicions[i] = transicions[i];
+    }
+    markParamEscenesDirty();
+  }
+
+  String reply = "";
+  for (int i = 0; i < 4; i++) {
+    reply += String((int)transicions[i].tipus) + "|" + String(transicions[i].saltPercent);
+    if (i < 3) reply += "|";
+  }
+  replyText(72, reply.c_str());
 }
 
 // S'executa quan arriba una escriptura "!Vxx=valor$" (valor diferent de "?").
 void handleWrite(int index, long value) {
   switch (index) {
-    case 1:
-    case 2:
-    case 3: {
-      // V01/V02/V03: canvia el valor (0-255) d'un dels 3 canals actualment seleccionats
-      const int slot = index - 1;                  // 0, 1 o 2 (posició dins selectedChannel)
-      const int channel = selectedChannel[slot];    // a quin canal DMX real correspon
-      const uint8_t newValue = (uint8_t)constrain(value, 0, 255);  // limita sempre a 0-255
-      if (dmxData[channel] != newValue) {           // només actua si el valor REALMENT canvia
-        dmxData[channel] = newValue;                // aplica el nou valor al buffer DMX
-        markDirty();                                // marca que cal desar-ho més endavant
-      }
-      break;
-    }
     case 4:
     case 5:
     case 6: {
@@ -1361,7 +1399,12 @@ void handleWrite(int index, long value) {
       }
       break;
     default:
-      // Índexs de música/cicle/escenes de l'ARDMX4 no s'implementen aquí.
+      // V01-03/V09-18/V21-28/V35/V50 (i qualsevol altre índex no gestionat
+      // explícitament) viuen a l'array genèric V[] — la reacció real
+      // (Escenes()/Cicle()/ConfiguracioParametres(), cridades des de
+      // loop() només mentre la pantalla corresponent és l'activa) hi passa
+      // per allà, mateix disseny que ardmx4-evo-firmware.
+      if (index >= 0 && index < V_SIZE) V[index] = (float)value;
       break;
   }
 }
@@ -1369,12 +1412,6 @@ void handleWrite(int index, long value) {
 // S'executa quan arriba una petició de lectura "!Vxx=?$".
 void handleRequest(int index) {
   switch (index) {
-    case 1:
-    case 2:
-    case 3:
-      // Retorna el valor DMX actual del canal seleccionat en aquest slot
-      replyNumber(index, dmxData[selectedChannel[index - 1]]);
-      break;
     case 4:
     case 5:
     case 6:
@@ -1431,7 +1468,11 @@ void handleRequest(int index) {
       replyText(76, storedPin.c_str());
       break;
     default:
-      // Qualsevol altre índex sol·licitat (V09, V11, V50, etc.) es queda sense resposta a propòsit
+      if (index >= 0 && index < V_SIZE) {
+        replyNumber(index, (long)V[index]);
+        return;
+      }
+      // Qualsevol altre índex sol·licitat es queda sense resposta a propòsit
       break;
   }
 }
@@ -1462,8 +1503,10 @@ void processFrame(const String &body) {
     handlePessebeNameChange(rhs);  // nom del pessebe
   } else if (index == 69) {
     handleDescriptionChange(rhs);  // descripció
-  } else if (index == 70) {
-    handleChannelBulk(rhs);  // consulta/assignació directa d'un canal (export/import)
+  } else if (index == 71) {
+    handleChannelBulk4Scene(rhs);  // consulta/assignació de les 4 escenes d'un canal (export/import)
+  } else if (index == 72) {
+    handleTransitionsBulk(rhs);  // consulta/assignació de les 4 transicions globals
   } else if (index == 73) {
     handlePinVerify(rhs);
   } else if (index == 74) {
