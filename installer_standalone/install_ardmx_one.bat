@@ -54,7 +54,7 @@ echo.
     0x1000 "%BINDIR%\bootloader.bin" ^
     0x8000 "%BINDIR%\partitions.bin" ^
     0xe000 "%BINDIR%\boot_app0.bin" ^
-    0x10000 "%BINDIR%\firmware.bin"
+    0x20000 "%BINDIR%\firmware.bin"
 
 if errorlevel 1 (
     echo.
