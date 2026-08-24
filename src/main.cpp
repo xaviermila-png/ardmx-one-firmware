@@ -584,23 +584,27 @@ void markParamEscenesDirty() {
 void loadCanals() {
   prefs.begin("ardmxone", false);
 
+  // Cada tros es valida (i, si cal, es reinicialitza) de manera
+  // INDEPENDENT dels altres — abans, un sol tros amb la mida antiga (p.ex.
+  // desat abans que CanalData guanyés transicions[4]) feia caure TOT
+  // l'array a zero, esborrant també els trossos que sí eren correctes.
+  // Amb saveCanals() desant només els trossos tocats (vegeu
+  // canalsChunkDirty[]), un tros mai editat es podia quedar amb la mida
+  // antiga indefinidament — confirmat en maquinari real: valors/noms/
+  // transicions d'un canal ja editat van desaparèixer sencers en arrencar
+  // de nou perquè un altre tros, mai tocat, encara tenia la mida vella.
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
-  bool allChunksOk = true;
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
     const String key = "chv" + String(chunk);
     CanalData *dest = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
-    if (!prefs.isKey(key.c_str())) {
-      allChunksOk = false;
-      break;
+    bool chunkOk = prefs.isKey(key.c_str());
+    if (chunkOk) {
+      const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
+      chunkOk = (bytesRead == chunkBytes);
     }
-    const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
-    if (bytesRead != chunkBytes) {
-      allChunksOk = false;
-      break;
+    if (!chunkOk) {
+      memset(dest, 0, chunkBytes);
     }
-  }
-  if (!allChunksOk) {
-    memset(canalsData, 0, sizeof(canalsData));
   }
 
   prefs.end();
@@ -764,23 +768,19 @@ String sanitizeText(const String &rawInput, int maxBytes) {
 void loadNames() {
   prefs.begin("ardmxone", false);
 
+  // Validació per tros independent — mateix motiu que loadCanals().
   const size_t chunkBytes = CHANNEL_NAME_CHUNK_SIZE * (MAX_CHANNEL_NAME_LENGTH + 1);
-  bool allChunksOk = true;
   for (int chunk = 0; chunk < CHANNEL_NAME_CHUNK_COUNT; chunk++) {
     const String key = "chn" + String(chunk);
     char *dest = &channelNames[chunk * CHANNEL_NAME_CHUNK_SIZE][0];
-    if (!prefs.isKey(key.c_str())) {
-      allChunksOk = false;
-      break;
+    bool chunkOk = prefs.isKey(key.c_str());
+    if (chunkOk) {
+      const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
+      chunkOk = (bytesRead == chunkBytes);
     }
-    const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
-    if (bytesRead != chunkBytes) {
-      allChunksOk = false;
-      break;
+    if (!chunkOk) {
+      memset(dest, 0, chunkBytes);
     }
-  }
-  if (!allChunksOk) {
-    memset(channelNames, 0, sizeof(channelNames));
   }
 
   pessebeName = prefs.isKey("pessebe") ? prefs.getString("pessebe", "") : "";
