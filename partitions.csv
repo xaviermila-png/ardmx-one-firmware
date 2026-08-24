@@ -1,0 +1,34 @@
+# Taula de particions personalitzada — igual que la "default.csv" del
+# framework Arduino-ESP32 (mateixa mida d'app0/app1, mateix suport OTA),
+# però amb la NVS ampliada de 20KB a 64KB.
+#
+# Motiu: amb 512 canals x (valors[4]+transicions[4]) = 12 bytes/canal
+# (~6KB) més els noms de canal (16 bytes/canal, ~8KB), més pessebe/
+# descripció/paramesc/btname/pin, el conjunt s'acosta o supera els 20KB
+# de la NVS per defecte — confirmat en maquinari real: prefs.putBytes()
+# fallava en silenci amb NVS_ERR_NOT_ENOUGH_SPACE (visible per Serial),
+# fent que cap valor/nom/transició de canal es desés mai a NVS malgrat
+# no donar cap error a l'app (que no rep confirmació d'escriptura).
+#
+# IMPORTANT: PlatformIO/Arduino-ESP32 escriu sempre "boot_app0.bin" a
+# l'adreça fixa 0xe000-0xffff en CADA flashejada (vegeu
+# framework-arduinoespressif32/tools/platformio-build.py,
+# FLASH_EXTRA_IMAGES) — no depèn del contingut d'aquesta taula ni de
+# board_upload.offset_address. Un primer intent posava la NVS ampliada
+# just a sobre d'aquest rang i cada reflashejada esborrava part de la
+# NVS real (confirmat en maquinari: un tros que abans es llegia bé
+# desapareixia després de tornar a flashejar amb el mateix firmware).
+# Per això aquí es deixa 0x9000-0xe000 sense reclamar (20KB perduts,
+# irrellevant amb 4MB de flash) i la NVS comença DESPRÉS d'aquesta zona
+# reservada, a 0x10000.
+#
+# app0 es queda a 0x20000 (calia moure'l perquè NVS+otadata hi càpiguen
+# abans) — platformio.ini declara board_upload.offset_address=0x20000
+# perquè PlatformIO NO dedueix aquesta adreça del csv per si sol.
+#
+# Name,   Type, SubType, Offset,  Size,    Flags
+otadata,  data, ota,     0xe000,  0x2000,
+nvs,      data, nvs,     0x10000, 0x10000,
+app0,     app,  ota_0,   0x20000, 0x140000,
+app1,     app,  ota_1,   0x160000,0x140000,
+coredump, data, coredump,0x2A0000,0x10000,

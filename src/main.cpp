@@ -442,7 +442,10 @@ void actualizarCanalFix(int i, int estat) {
 void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
   const int escenaIndex = estatActual / 2;  // mateixa divisió que actualizarCanalFix
   const uint8_t v0 = canalsData[i].valors[escenaIndex];
-  const uint8_t v1 = canalsData[i].valors[(escenaIndex + 1) % 4];
+  // % NumeroEscenes (no % 4 fix): amb menys de 4 escenes actives, la
+  // darrera transició torna a l'escena 1, no a la següent posició fixa
+  // de l'array (que podria ser una escena inactiva/no configurada).
+  const uint8_t v1 = canalsData[i].valors[(escenaIndex + 1) % NumeroEscenes];
   const Transicio &tr = canalsData[i].transicions[escenaIndex];
   valorActual[i] = interpolar(v0, v1, t_pct, tr.tipus, tr.saltPercent);
 }
@@ -560,6 +563,8 @@ void markCanalsDirty(int channelIndex0) {
   canalsChunkDirty[channelIndex0 / CHANNEL_CHUNK_SIZE] = true;
   canalsDirty = true;
   lastChangeMillis = millis();
+  Serial.printf("[NVS] markCanalsDirty canal=%d tros=%d\n", channelIndex0 + 1,
+                channelIndex0 / CHANNEL_CHUNK_SIZE);
 }
 
 // Marca TOTS els trossos com a pendents — només per a un reset de fàbrica
@@ -594,6 +599,8 @@ void loadCanals() {
   // transicions d'un canal ja editat van desaparèixer sencers en arrencar
   // de nou perquè un altre tros, mai tocat, encara tenia la mida vella.
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
+  Serial.printf("[NVS] loadCanals: chunkBytes=%u sizeof(CanalData)=%u\n",
+                (unsigned)chunkBytes, (unsigned)sizeof(CanalData));
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
     const String key = "chv" + String(chunk);
     CanalData *dest = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
@@ -601,9 +608,18 @@ void loadCanals() {
     if (chunkOk) {
       const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
       chunkOk = (bytesRead == chunkBytes);
+      if (!chunkOk) {
+        Serial.printf("[NVS] loadCanals: tros %d ha llegit %u bytes (esperava %u)\n",
+                      chunk, (unsigned)bytesRead, (unsigned)chunkBytes);
+      }
+    } else {
+      Serial.printf("[NVS] loadCanals: tros %d no existeix\n", chunk);
     }
     if (!chunkOk) {
       memset(dest, 0, chunkBytes);
+    } else {
+      Serial.printf("[NVS] loadCanals: tros %d OK (canal %d valors[0]=%d)\n", chunk,
+                    chunk * CHANNEL_CHUNK_SIZE + 1, dest->valors[0]);
     }
   }
 
@@ -613,6 +629,7 @@ void loadCanals() {
 // Es crida quan cal desar els valors de canal de les 4 escenes (des del
 // debounce del loop()).
 void saveCanals() {
+  Serial.println("[NVS] saveCanals: comencant...");
   prefs.begin("ardmxone", false);
 
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
@@ -620,14 +637,19 @@ void saveCanals() {
     if (!canalsChunkDirty[chunk]) continue;
     const String key = "chv" + String(chunk);
     const CanalData *src = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
-    if (prefs.putBytes(key.c_str(), src, chunkBytes) != chunkBytes) {
-      Serial.printf("ERROR desant valors de canal (tros %d)\n", chunk);
+    const size_t written = prefs.putBytes(key.c_str(), src, chunkBytes);
+    if (written != chunkBytes) {
+      Serial.printf("[NVS] ERROR desant valors de canal (tros %d): escrits %u de %u bytes\n",
+                    chunk, (unsigned)written, (unsigned)chunkBytes);
+    } else {
+      Serial.printf("[NVS] saveCanals: tros %d desat (%u bytes)\n", chunk, (unsigned)written);
     }
     canalsChunkDirty[chunk] = false;
   }
 
   prefs.end();
   canalsDirty = false;
+  Serial.println("[NVS] saveCanals: fet");
 }
 
 // Es crida un cop, a l'arrencada: recupera l'escena activa, el nombre
@@ -1114,7 +1136,9 @@ void Escenes() {
   if (V[35] != 0) {
     V[9] = EscenaActiva + V[35];
     if (V[9] < 1) V[9] = 1;
-    if (V[9] > 4) V[9] = 4;
+    // NumeroEscenes (no 4 fix): no es pot avançar més enllà de l'última
+    // escena activa configurada.
+    if (V[9] > NumeroEscenes) V[9] = NumeroEscenes;
 
     EscenaActiva = V[9];
     ParamEscenes.EscenaActiva = EscenaActiva;
@@ -1826,6 +1850,7 @@ void loop() {
     saveCanals();
   } else if (paramEscenesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     saveParamEscenes();
+    Serial.println("[NVS] Parametres d'escenes desats a NVS");
   }
 
   // Envia com a màxim cada DMX_SEND_INTERVAL_MS (vegeu el comentari a la
