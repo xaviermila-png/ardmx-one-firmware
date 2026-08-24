@@ -26,9 +26,13 @@
 # abans) — platformio.ini declara board_upload.offset_address=0x20000
 # perquè PlatformIO NO dedueix aquesta adreça del csv per si sol.
 #
+# Sense partició de coredump a propòsit — igual que ardmx4-evo-firmware
+# (que no en té): cap dels dos projectes té cap eina/flux per llegir un
+# bolcat de crash, així que no val la pena reservar-hi espai només per
+# treure l'avís cosmètic "No core dump partition found" de l'arrencada.
+#
 # Name,   Type, SubType, Offset,  Size,    Flags
 otadata,  data, ota,     0xe000,  0x2000,
 nvs,      data, nvs,     0x10000, 0x10000,
 app0,     app,  ota_0,   0x20000, 0x140000,
 app1,     app,  ota_1,   0x160000,0x140000,
-coredump, data, coredump,0x2A0000,0x10000,
