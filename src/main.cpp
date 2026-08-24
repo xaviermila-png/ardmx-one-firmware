@@ -158,7 +158,11 @@ constexpr int MAX_DMX_CHANNEL = 512;  // nombre total de canals DMX que s'envien
 
 // Guardat a NVS: no es desa a cada canvi de canal (desgastaria la flash), es
 // desa com a màxim un cop transcorregut aquest temps des de l'últim canvi.
-constexpr uint32_t SAVE_DEBOUNCE_MS = 3000;  // temps d'inactivitat abans de desar
+// Igualat als 500ms de ardmx4-evo-firmware (abans 3000ms aquí) — amb el
+// desat per trossos (vegeu canalsChunkDirty[]) cada desat ja és barat (1-2
+// trossos, no els 16), així que baixar-lo no reintrodueix cap encallament i
+// deixa menys marge de perdre canvis recents si es talla l'alimentació.
+constexpr uint32_t SAVE_DEBOUNCE_MS = 500;  // temps d'inactivitat abans de desar
 
 // Nom Bluetooth lliurement editable (vegeu handleNameChange()) — es desa a
 // NVS i es pot canviar en calent (amb reinici) des de la pantalla de
