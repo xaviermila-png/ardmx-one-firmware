@@ -182,7 +182,7 @@ constexpr int MAX_CHANNEL_NAME_LENGTH = 15;    // bytes — buffer fix, veure ca
 constexpr int MAX_PESSEBE_NAME_LENGTH = 96;    // bytes — marge folgat per a 32 caràcters accentuats
 constexpr int MAX_DESCRIPTION_LENGTH = 384;    // bytes — marge folgat per a 128 caràcters accentuats
 
-const char *FIRMWARE_VERSION_TEXT = "ARDMX One v2.0";  // text que es respon a la petició V62
+const char *FIRMWARE_VERSION_TEXT = "ARDMX One v2.1";  // text que es respon a la petició V62
 
 // PIN de connexió — opcional (String buida = desactivat, comportament de
 // sempre). Quan n'hi ha un, cap V/T es contesta ni s'aplica (V64, V73, V75
@@ -200,9 +200,11 @@ bool pinAuthenticated = false;
 // "tipus" es queda "ARDMX_ONE" (NO "ARDMX_ONE_V2") — l'app distingeix v1 de
 // v2 pel número major de "firmware", no per un tipus nou. Les unitats v1 ja
 // desplegades continuen responent "1.0.0" per sempre (mai es reflashegen);
-// qualsevol placa que rebi aquest firmware nou respon "2.0.0".
+// qualsevol placa que rebi aquest firmware nou respon "2.x.0" (bumpat a
+// cada canvi real, vegeu FIRMWARE_VERSION_TEXT — així es pot comprovar des
+// de l'app/port sèrie que un flashejat ha posat de veritat l'última versió).
 String buildIdentifyJson() {
-  String json = "{\"tipus\":\"ARDMX_ONE\",\"firmware\":\"2.0.0\",";
+  String json = "{\"tipus\":\"ARDMX_ONE\",\"firmware\":\"2.1.0\",";
   json += "\"num_canals_max\":512,\"pin\":";
   json += (storedPin.length() > 0) ? "true" : "false";
   json += "}";
