@@ -96,6 +96,13 @@ n'hi ha 1.
 Controlat des de la mateixa app Flutter que l'ARDMX EVO:
 [ardmx_app](https://github.com/xaviermila-png/ardmx_app).
 
+Aquest firmware no genera ni llegeix cap fitxer JSON — l'exportació/
+importació de la configuració des de la pantalla "Configuració" de l'app es
+munta i s'aplica sencera a base de peticions d'aquest mateix protocol
+`!Vxx=valor$` (V71 per canal, V18/V08/V21-28/V68/V69...). L'esquema JSON
+unificat (vàlid tant per a l'ARDMX One v2 com per a l'ARDMX EVO) es
+documenta a `ardmx_app`.
+
 ## Llicència
 Creative Commons Atribució-NoComercial-CompartirIgual 4.0 (CC BY-NC-SA 4.0).
 Vegeu [LICENSE](LICENSE).
