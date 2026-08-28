@@ -44,11 +44,15 @@ haver d'obrir el projecte ni compilar res:
   en aquest ordinador. Útil només en una màquina que ja té PlatformIO.
 
 Totes dues funcionen igual: dona doble clic a `install_ardmx_one.bat`, escriu
-el port COM on hi ha connectat l'ESP32 (es mostren els ports disponibles) i
-prem Enter. Al final mostra "Firmware instal·lat correctament" o l'error
-concret (port incorrecte, cable mal endollat...).
+el port COM on hi ha connectat l'ESP32 (es mostren els ports disponibles),
+confirma que vols esborrar la configuració existent i prem Enter. Al final
+mostra "Firmware instal·lat correctament" o l'error concret (port incorrecte,
+cable mal endollat...).
 
-**Què fa exactament**: escriu 4 blocs al flash de l'ESP32 amb `esptool`:
+**Què fa exactament**: amb confirmació explícita de l'usuari, primer esborra
+la NVS sencera (`erase_region 0x10000 0x10000`, 64 KB — valors/transicions de
+canal, noms, pessebre, descripció, nombre de canals/escenes, nom Bluetooth,
+PIN, tot) i després escriu 4 blocs al flash de l'ESP32 amb `esptool`:
 
 | Fitxer | Adreça | Contingut |
 |---|---|---|
@@ -57,11 +61,19 @@ concret (port incorrecte, cable mal endollat...).
 | `boot_app0.bin` | `0xe000` | Selector de partició OTA (de quin `app` arrenca) |
 | `firmware.bin` | `0x20000` | El programa (l'aplicació ARDMX One v2 en si) |
 
-**La NVS (`0x10000`-`0x1ffff`, 64 KB) mai es toca** — reflashejar amb aquest
-instal·lador **no esborra** la configuració desada (valors/transicions de
-canal, noms, nom del pessebre, descripció, nombre de canals/escenes actius,
-nom Bluetooth, PIN...). Només un `esptool erase_flash` complet (que
-l'instal·lador no fa) l'esborraria.
+**Instal·lador = torna a l'estat de fàbrica sempre** (decisió explícita del
+2026-08-28, mateixa que a `ardmx4-evo-firmware`: abans es preservava la NVS
+entre flashejos, ara es vol el contrari — cada instal·lació ha de deixar el
+dispositiu net). Si només vols actualitzar el firmware SENSE perdre la
+configuració (p. ex. durant desenvolupament), fes-ho amb `pio run -t upload`
+en lloc de l'instal·lador — aquest camí sí que preserva la NVS (PlatformIO no
+la toca mai per si sol). El "Reset de fàbrica" de dins l'app és un tercer
+camí, diferent d'aquests dos: esborra canals/escenes/transicions/pessebre/
+descripció però **mai** el nom Bluetooth ni el PIN.
+
+**Important**: les unitats ARDMX One **v1** ja desplegades (Bluetooth
+Classic, sense escenes) **mai** es flashegen amb aquest instal·lador — és
+només per a la v2 (vegeu la nota de capçalera d'aquest README).
 
 > **Nota històrica**: `firmware.bin` es va moure de `0x10000` a `0x20000` (i
 > la NVS, de 20 KB a 64 KB) perquè el format de canal nou (valors + 4
@@ -77,6 +89,8 @@ l'instal·lador no fa) l'esborraria.
 `.pio/build/esp32dev/bootloader.bin`, `.pio/build/esp32dev/partitions.bin` i
 `.pio/build/esp32dev/firmware.bin` a la carpeta `bin/` de totes dues
 instal·ladors (`boot_app0.bin` no canvia mai, no cal tornar-lo a copiar).
+Actualitza també `bin/version.txt` (versió + data) a totes dues — l'script
+`.bat` el mostra en arrencar.
 
 ## Nom del dispositiu Bluetooth
 Lliurement editable (fins a 15 caràcters, només lletres, xifres i `_`) des de

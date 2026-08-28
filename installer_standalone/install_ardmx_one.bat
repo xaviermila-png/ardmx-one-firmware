@@ -11,6 +11,11 @@ echo.
 set "ESPTOOL=%~dp0esptool.exe"
 set "BINDIR=%~dp0bin"
 
+if exist "%BINDIR%\version.txt" (
+    type "%BINDIR%\version.txt"
+    echo.
+)
+
 if not exist "%ESPTOOL%" (
     echo ERROR: no es troba esptool.exe al costat d'aquest script.
     goto :fi
@@ -41,6 +46,42 @@ if defined AUTOPORT (
 
 if "%COMPORT%"=="" (
     echo No has escrit cap port. Sortint.
+    goto :fi
+)
+
+echo.
+echo ATENCIO: aquest instal-lador actualitzara el firmware de l'ARDMX One a
+echo la versio indicada mes amunt, i ESBORRARA TOTA la configuracio desada
+echo al dispositiu (canals, escenes, transicions, pessebre, descripcio,
+echo nom Bluetooth, PIN...), deixant-lo com de fabrica.
+echo.
+echo Si vols conservar la configuracio actual: CANCEL·LA ara, ves a la
+echo pantalla "Configuracio" de l'app i fes una EXPORTACIO (fitxer JSON).
+echo Un cop instal-lat aquest firmware, podras IMPORTAR aquest fitxer per
+echo recuperar canals/escenes/transicions/pessebre/descripcio -- pero no
+echo el nom Bluetooth ni el PIN, que l'exportacio no inclou i hauras de
+echo tornar a configurar a ma si els havies canviat.
+echo.
+set /p CONFIRM="Vols continuar? (s/n): "
+if /i not "%CONFIRM%"=="s" (
+    echo Cancel·lat.
+    goto :fi
+)
+
+echo.
+echo Esborrant la configuracio anterior (NVS)...
+echo.
+
+"%ESPTOOL%" --chip esp32 --port %COMPORT% --baud 460800 ^
+    erase-region 0x10000 0x10000
+
+if errorlevel 1 (
+    echo.
+    echo ============================================
+    echo   Hi ha hagut un error esborrant la configuracio.
+    echo   Comprova que el port es correcte i que
+    echo   el cable USB esta be endollat.
+    echo ============================================
     goto :fi
 )
 
