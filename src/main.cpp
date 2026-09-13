@@ -1135,6 +1135,27 @@ void InicialitzarPrograma() {
 // del valor d'un canal a l'escena activa) — cridada des de loop() només
 // mentre la pantalla d'Escenes/Canals és l'activa (V50), igual que l'EVO.
 void Escenes() {
+  // Es desa primer qualsevol edicio pendent dels 3 sliders visibles (V[1..3]
+  // diferent del valor ja desat per a l'escena activa) — ABANS de mirar si
+  // tambe ha arribat un canvi d'escena (V[35]) en aquest mateix cicle de
+  // loop(): dues escriptures fetes molt seguides des de l'app (l'usuari mou
+  // un slider i de seguida canvia d'escena) poden arribar totes dues abans
+  // que loop() torni a cridar Escenes(), i la branca de V[35] de mes avall
+  // surt amb "return" de seguida — mai arribava a la comprovacio de
+  // V[1..3] guardada aqui baix. A sobre, aquesta branca ja crida
+  // RecuperarValorsCanals(), que sobreescriu V[1..3] amb el valor antic —
+  // l'edicio es perdia en silenci sense arribar-se mai a desar. Mateix bug
+  // confirmat en maquinari real a ardmx4-evo-firmware.
+  if (V[1] != canalsData[selectedChannel[0] - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(selectedChannel[0] - 1, EscenaActiva - 1, (int)V[1]);
+  }
+  if (V[2] != canalsData[selectedChannel[1] - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(selectedChannel[1] - 1, EscenaActiva - 1, (int)V[2]);
+  }
+  if (V[3] != canalsData[selectedChannel[2] - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(selectedChannel[2] - 1, EscenaActiva - 1, (int)V[3]);
+  }
+
   if (V[35] != 0) {
     V[9] = EscenaActiva + V[35];
     if (V[9] < 1) V[9] = 1;
@@ -1152,19 +1173,6 @@ void Escenes() {
     aplicarSelector(estatCorrespondent);
 
     V[35] = 0;
-    return;
-  }
-
-  if (V[1] != canalsData[selectedChannel[0] - 1].valors[EscenaActiva - 1]) {
-    guardarEnviarValor(selectedChannel[0] - 1, EscenaActiva - 1, (int)V[1]);
-    return;
-  }
-  if (V[2] != canalsData[selectedChannel[1] - 1].valors[EscenaActiva - 1]) {
-    guardarEnviarValor(selectedChannel[1] - 1, EscenaActiva - 1, (int)V[2]);
-    return;
-  }
-  if (V[3] != canalsData[selectedChannel[2] - 1].valors[EscenaActiva - 1]) {
-    guardarEnviarValor(selectedChannel[2] - 1, EscenaActiva - 1, (int)V[3]);
     return;
   }
 }
