@@ -1825,7 +1825,13 @@ void loop() {
     if (V[50] == 3 && (EstatPlay == "Play" || EstatPlay == "Pausa")) PararReproduccio();
     if (V[50] == 4) ConfiguracioParametres();
     if (V[50] == 1) Cicle();
-    if (V[50] == 5) Escenes();
+    // V[50]==8 (pantalla RGB) tracta els mateixos V[1]/V[2]/V[3] que la
+    // pantalla de Canals (V[50]==5) — sense aquesta crida, els canvis fets
+    // des de la roda RGB es quedaven a V[] sense aplicar-se mai a
+    // canalsData/DMX fins que l'usuari tornava a la pantalla de Canals
+    // (que sí crida Escenes()). Ja hi era al firmware clàssic
+    // (ARDMX4.ino), es va perdre en portar el codi aquí.
+    if (V[50] == 5 || V[50] == 8) Escenes();
 
     if (cicloEnCurso && EstatPlay == "Play") {
       AvancarCicleSiCal();
