@@ -1,2 +1,2 @@
-ARDMX One v2.1
-Generat: 2026-08-28
+ARDMX One v2.2
+Generat: 2026-09-13

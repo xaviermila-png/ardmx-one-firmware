@@ -1,6 +1,6 @@
 # ARDMX One v2 — firmware ESP32
 
-Versió actual: **v2.1** (`FIRMWARE_VERSION_TEXT`, resposta a V62 —
+Versió actual: **v2.2** (`FIRMWARE_VERSION_TEXT`, resposta a V62 —
 comprovable des de l'app un cop connectat, a Crèdits o Menú Principal).
 
 Controlador DMX512 (fins a 512 canals) amb **4 escenes** i **4 transicions

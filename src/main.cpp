@@ -167,7 +167,7 @@ constexpr uint32_t SAVE_DEBOUNCE_MS = 500;  // temps d'inactivitat abans de desa
 // Nom Bluetooth lliurement editable (vegeu handleNameChange()) — es desa a
 // NVS i es pot canviar en calent (amb reinici) des de la pantalla de
 // Configuració de l'app.
-const char *DEFAULT_BLUETOOTH_NAME = "ARDMXOne";
+const char *DEFAULT_BLUETOOTH_NAME = "ARDMXONE";
 constexpr int MAX_BLUETOOTH_NAME_LENGTH = 15;  // igual que el límit de l'app
 
 // Noms editables (canals, pessebe, descripció) — vegeu sanitizeText(),
@@ -182,7 +182,7 @@ constexpr int MAX_CHANNEL_NAME_LENGTH = 15;    // bytes — buffer fix, veure ca
 constexpr int MAX_PESSEBE_NAME_LENGTH = 96;    // bytes — marge folgat per a 32 caràcters accentuats
 constexpr int MAX_DESCRIPTION_LENGTH = 384;    // bytes — marge folgat per a 128 caràcters accentuats
 
-const char *FIRMWARE_VERSION_TEXT = "ARDMX One v2.1";  // text que es respon a la petició V62
+const char *FIRMWARE_VERSION_TEXT = "ARDMX One v2.2";  // text que es respon a la petició V62
 
 // PIN de connexió — opcional (String buida = desactivat, comportament de
 // sempre). Quan n'hi ha un, cap V/T es contesta ni s'aplica (V64, V73, V75
@@ -256,13 +256,16 @@ volatile uint16_t bleConnHandle = BLE_HS_CONN_HANDLE_NONE;
 // Índex 0 = start code DMX (sempre 0). Índexs 1..512 = valors dels canals.
 uint8_t dmxData[DMX_PACKET_SIZE];  // buffer amb TOT l'univers DMX que s'envia cada cicle
 
+// Valor inicial/de fàbrica de numeroCanals (vegeu més avall) — multiple de
+// 3, com exigeix roundDownToMultipleOf3().
+constexpr int DEFAULT_NUMERO_CANALS = 102;
+
 // Nombre de canals actius que realment s'envien per DMX. Els canals per
 // sobre d'aquest valor es queden al buffer (amb el seu últim valor) però no
 // s'inclouen a la trama enviada. Sempre és un múltiple de 3 (vegeu
 // roundDownToMultipleOf3()) perquè els 3 sliders de l'app puguin avançar per
-// grups sencers sense mai sobrepassar aquest límit. Per defecte, tot
-// l'univers arrodonit avall (512 no és múltiple de 3).
-int numeroCanals = 510;
+// grups sencers sense mai sobrepassar aquest límit.
+int numeroCanals = DEFAULT_NUMERO_CANALS;
 
 // Arrodoneix cap avall al múltiple de 3 més proper (mínim 3).
 int roundDownToMultipleOf3(int value) {
@@ -528,14 +531,14 @@ void sceneLoad() {
     memset(&dmxData[1], 0, MAX_DMX_CHANNEL);  // primera vegada: tots els canals a 0 (apagat)
   }
 
-  // Nombre de canals actius — per defecte tot l'univers (arrodonit) si mai
-  // s'ha desat. Es torna a arrodonir en carregar per si mai queda un valor
-  // desat d'una versió anterior que no apliqués encara aquesta regla.
+  // Nombre de canals actius — DEFAULT_NUMERO_CANALS si mai s'ha desat.
+  // Es torna a arrodonir en carregar per si mai queda un valor desat d'una
+  // versió anterior que no apliqués encara aquesta regla.
   if (prefs.isKey("numch")) {
     const int stored = constrain((int)prefs.getUInt("numch", MAX_DMX_CHANNEL), 1, MAX_DMX_CHANNEL);
     numeroCanals = roundDownToMultipleOf3(stored);
   } else {
-    numeroCanals = roundDownToMultipleOf3(MAX_DMX_CHANNEL);
+    numeroCanals = DEFAULT_NUMERO_CANALS;
   }
 
   prefs.end();          // tanca l'accés a la NVS
@@ -1213,7 +1216,7 @@ void performFactoryReset() {
   // numeroCanals es queda amb el mecanisme de desat de v1 (sceneSave() també
   // escriu el blob "scene", ara sense ús real en v2 — es manté per no haver
   // de separar numeroCanals en una clau NVS pròpia).
-  numeroCanals = roundDownToMultipleOf3(MAX_DMX_CHANNEL);
+  numeroCanals = DEFAULT_NUMERO_CANALS;
   selectGroup(1);
   sceneSave();
 
