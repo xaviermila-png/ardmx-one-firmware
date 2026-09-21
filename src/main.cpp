@@ -204,7 +204,7 @@ bool pinAuthenticated = false;
 // cada canvi real, vegeu FIRMWARE_VERSION_TEXT — així es pot comprovar des
 // de l'app/port sèrie que un flashejat ha posat de veritat l'última versió).
 String buildIdentifyJson() {
-  String json = "{\"tipus\":\"ARDMX_ONE\",\"firmware\":\"2.1.0\",";
+  String json = "{\"tipus\":\"ARDMX_ONE\",\"firmware\":\"2.2.0\",";
   json += "\"num_canals_max\":512,\"pin\":";
   json += (storedPin.length() > 0) ? "true" : "false";
   json += "}";
