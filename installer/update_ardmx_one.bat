@@ -4,8 +4,8 @@ title Actualitzador de firmware ARDMX One
 
 echo ============================================
 echo   Actualitzador de firmware - ARDMX One
-echo   (nomes actualitza la versio, NO esborra
-echo    la configuracio desada al dispositiu)
+echo   (ACTUALITZACIO MENOR: nomes canvia el programa,
+echo    conserva la configuracio desada al dispositiu)
 echo ============================================
 echo.
 
@@ -61,10 +61,11 @@ if "%COMPORT%"=="" (
 )
 
 echo.
-echo Aquest instal-lador NOMES actualitza el programa (firmware.bin) a la
-echo versio indicada mes amunt. La configuracio ja desada al dispositiu
-echo (canals, escenes, transicions, pessebre, nom Bluetooth, PIN...) es
-echo queda tal com esta.
+echo Aquest instal-lador NOMES actualitza el programa (firmware.bin) i
+echo conserva la configuracio desada (canals, escenes, transicions, pessebre, descripcio, nom Bluetooth, PIN...).
+echo Es nomes per a canvis MENORS. Si la versio es MAJOR (canvis
+echo estructurals a com es desa la configuracio), usa install_ardmx_one.bat en lloc
+echo d'aquest: esborra tot el dispositiu, aixi que fes abans una exportacio.
 echo.
 set /p CONFIRM="Vols continuar? (s/n): "
 if /i not "%CONFIRM%"=="s" (

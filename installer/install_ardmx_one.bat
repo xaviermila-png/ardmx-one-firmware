@@ -60,11 +60,12 @@ if "%COMPORT%"=="" (
 
 echo.
 echo ATENCIO: aquest instal-lador actualitzara el firmware de l'ARDMX One a
-echo la versio indicada mes amunt, i ESBORRARA TOTA la configuracio desada
-echo al dispositiu (canals, escenes, transicions, pessebre, descripcio,
-echo nom Bluetooth, PIN...), deixant-lo com de fabrica.
+echo la versio indicada mes amunt, i ESBORRARA TOT el contingut de la placa:
+echo firmware, particions i tota la configuracio desada (canals, escenes,
+echo transicions, pessebre, descripcio, nom Bluetooth, PIN...), deixant-la de fabrica.
 echo.
-echo Si vols conservar la configuracio actual: CANCEL·LA ara, ves a la
+echo Es RECOMANA fer una copia de la configuracio abans de continuar.
+echo Si encara no la tens: CANCEL·LA ara, ves a la
 echo pantalla "Configuracio" de l'app i fes una EXPORTACIO (fitxer JSON).
 echo Un cop instal-lat aquest firmware, podras IMPORTAR aquest fitxer per
 echo recuperar canals/escenes/transicions/pessebre/descripcio -- pero no
@@ -78,11 +79,11 @@ if /i not "%CONFIRM%"=="s" (
 )
 
 echo.
-echo Esborrant la configuracio anterior (NVS)...
+echo Esborrant tota la memoria de la placa...
 echo.
 
 "%PIO_PYTHON%" "%ESPTOOL%" --chip esp32 --port %COMPORT% --baud 460800 ^
-    erase_region 0x10000 0x10000
+    erase_flash
 
 if errorlevel 1 (
     echo.
