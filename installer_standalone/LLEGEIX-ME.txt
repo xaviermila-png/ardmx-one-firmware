@@ -40,7 +40,12 @@ Si hi ha algun error
 
 Notes
 -----
-- Aquest instal·lador NO esborra la configuració ja desada a la placa
-  (noms de canal, escena, nom Bluetooth...).
+- ATENCIO: aquest instal·lador ESBORRA TOTA la configuracio ja
+  desada a la placa (canals, escenes, noms, pessebre...), deixant-la
+  com de fabrica. Si la vols conservar, exporta-la des de l'app
+  (Eines -> Exportar) ABANS d'executar aquest .bat, i torna-la a
+  importar (Eines -> Importar) un cop acabat.
+  (El nom Bluetooth i el PIN no es desen a l'exportacio -- caldra
+  tornar-los a configurar a ma si els havies canviat.)
 - Tots els fitxers d'aquesta carpeta (esptool.exe, els .bin, el .ps1)
   són necessaris — no separis el .bat de la resta.
