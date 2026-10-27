@@ -65,8 +65,8 @@ echo firmware, particions i tota la configuracio desada (canals, escenes,
 echo transicions, pessebre, descripcio, nom Bluetooth, PIN...), deixant-la de fabrica.
 echo.
 echo Es RECOMANA fer una copia de la configuracio abans de continuar.
-echo Si encara no la tens: CANCEL·LA ara, ves a la
-echo pantalla "Configuracio" de l'app i fes una EXPORTACIO (fitxer JSON).
+echo Si encara no la tens: CANCEL·LA ara, ves al
+echo menu "Eines" de l'app i fes una EXPORTACIO (fitxer JSON).
 echo Un cop instal-lat aquest firmware, podras IMPORTAR aquest fitxer per
 echo recuperar canals/escenes/transicions/pessebre/descripcio -- pero no
 echo el nom Bluetooth ni el PIN, que l'exportacio no inclou i hauras de
